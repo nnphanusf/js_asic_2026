@@ -9,6 +9,8 @@ The specification of the instruction set is [isa.md](isa.md), the register map i
 from `sw/bitweaver/regmap.py`), and [programming_guide.md](programming_guide.md) walks through writing a new
 protocol.
 
+![Four engines running WS2812, UART, SPI and JTAG at the same time](images/four_protocols.svg)
+
 ## Block diagram
 
 ```mermaid

@@ -16,6 +16,11 @@ timestamp, FIFO chaining) let firmware speak protocols the chip was never design
 | PS/2 | CAN 2.0A (500 kbit/s, 1 Mbit/s) | low-speed USB packets |
 | 1-Wire | four of the above at the same time | |
 
+![Four engines running WS2812, UART, SPI and JTAG at the same time](docs/images/four_protocols.svg)
+
+*Four engines, four protocols, one 60 MHz clock: WS2812, UART at 1.9 Mbaud, an SPI frame and a JTAG IR scan
+(rendered from the cycle-accurate simulator by `scripts/wave_svg.py`; the RTL matches it on every cycle).*
+
 ## Documentation
 
 * [Architecture](docs/architecture.md): block diagram, engines, host port, design decisions
