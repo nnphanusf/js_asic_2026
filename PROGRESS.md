@@ -11,8 +11,10 @@ Deadline 2027-01-18. See `PLAN.md` for the full schedule.
       pins; 7 passing cocotb tests and clean lint
 - [x] `docs/info.md` datasheet draft
 - [x] Push branch; `test` and `docs` green on `phase0-setup` (4eb41f6)
-- [ ] `gds` + precheck green at 8x4 / 60 MHz (4eb41f6 failed: 19 critical disconnected pins; fixed by the probe,
-      awaiting the next run)
+- [x] `gds` + precheck green at 8x4 / 60 MHz on 3627c90 (4eb41f6 had failed with 19 critical disconnected pins;
+      fixed by the probe). 300 cells, no timing violations; numbers in `docs/results.md`
+- [x] `viewer` job green after setting the GitHub Pages source to GitHub Actions (2026-11-17); layout viewer at
+      https://nnphanusf.github.io/js_asic_2026/
 - [ ] Spec docs: `docs/isa.md`, register map, pinout table
 - [ ] Area spike: synthesize a skeleton engine + FIFO against the IHP cell library, record in `docs/results.md`
 - [ ] Confirm how the demo board's RP2350 drives `ui_in` (TT MicroPython SDK) for the host driver
