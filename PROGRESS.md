@@ -32,18 +32,16 @@ path estimate 9.07 ns at the slow corner without wire load, against 16.67 ns. Li
 **Cut.** 10BASE-T (host port bandwidth below the line rate; see decisions). Nothing else from PLAN was cut;
 1-Wire was added for the programming guide.
 
-**CI status at the end of this session.** `test`, `docs` and `lockstep` green on a1e294a. `formal`: three of four
-jobs green on a1e294a; `sm_props` failed only because the OSS CAD Suite download hit GitHub's anonymous API rate
-limit; fixed in b1aa1da (passes `GITHUB_TOKEN` to the setup action), not yet pushed. `gds` for the full design:
-two hardening runs of the full design (793167b and a1e294a; the RTL is identical apart from
-`ifdef FORMAL` blocks) were still in progress after 3 h 15 min and 1 h 44 min; results go into `docs/results.md`.
+**CI status at the end of this session.** On ab202af (the final commit): `test`, `lockstep`, `formal` (all four
+jobs) and `docs` green. (`formal` had failed once on a1e294a only because the OSS CAD Suite download hit GitHub's
+anonymous API rate limit; fixed by passing `GITHUB_TOKEN`.) `gds` for the full design: three hardening runs
+(793167b, a1e294a, ab202af; identical RTL apart from `ifdef FORMAL` blocks) were in progress, the oldest after
+3 h 40 min; results go into `docs/results.md`.
 
 **Steps left for the human.**
-1. The repository was switched to private during this session, so CI status could only be read through the
-   signed-in browser, and Actions minutes now count against the account's quota (each `gds` run is roughly
-   three hours of runner time). Make it public again (needed for the submission anyway) or check the quota.
-2. Push the local commits (`git push origin phase0-setup`) and confirm `formal` goes green and `gds`, `precheck`,
-   `gl_test` and `viewer` pass; then merge `phase0-setup` into `main`.
+1. Confirm the full-design `gds`, `precheck`, `gl_test` and `viewer` jobs pass, then merge `phase0-setup` into
+   `main`. (The repository was briefly private during this session and is public again.)
+2. Each push runs `gds`, about three hours of runner time; consider whether doc-only pushes should skip it.
 3. Optionally skim `docs/` (architecture, ISA, programming guide, verification, results, AI usage).
 4. Submit through the Jane Street form when it is posted (deadline 2027-01-18; RTL freeze 2027-01-08).
 
