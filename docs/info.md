@@ -13,7 +13,7 @@ Bitweaver is a programmable protocol emulator. Instead of fixed UART, SPI or I2C
 cycle-exact engines that wiggle and sample pins under firmware control. A protocol is a short program, so the chip
 can be reprogrammed after fabrication to speak protocols it was never designed for.
 
-Planned architecture (status: Phase 0 skeleton; all pins currently idle):
+Planned architecture (status: Phase 0 skeleton; protocol pins idle, host port answers a bring-up probe):
 
 - **Four engines (SM0 to SM3)** share a 64 x 16-bit instruction memory. Each has a program counter, two scratch
   registers, input and output shift registers, 4-deep TX and RX FIFOs, a fractional clock divider, side-set pins
@@ -38,6 +38,19 @@ RP2350 on the Tiny Tapeout demo board:
 
 The program is lost whenever the design is deselected, so reload it after each selection. Example programs and a
 MicroPython driver will live in `sw/`.
+
+**Phase 0 bring-up probe.** Until the engines land, the host port is a read-only SPI target (mode 0, MSB first,
+SCK at most clk/8). While `HOST_CS_N` is low, each byte read on `HOST_MISO` is chosen by the previous byte written
+on `HOST_MOSI`; the first byte after `HOST_CS_N` falls is the ID.
+
+| Command | Reply |
+|---|---|
+| `0x00` | ID, `0xB7` |
+| `0x01` | `PIN4..PIN0` (`ui_in[4:0]`) |
+| `0x02` | `PIN18..PIN11` (`uio_in[7:0]`) |
+| `0x03` | free-running 8-bit cycle counter |
+
+For example, sending `01 00` reads back `B7` followed by the state of `ui_in[4:0]`.
 
 ## External hardware
 
