@@ -17,3 +17,9 @@ test/lib/__pycache__/
 .pytest_cache/
 formal/*/
 !formal/*.sby
+verif/lockstep/obj/
+verif/lockstep/obj_cov/
+verif/lockstep/work/
+verif/lockstep/coverage/
+verif/lockstep/lockstep_log.jsonl
+runs/

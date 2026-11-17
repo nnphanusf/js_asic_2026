@@ -1,0 +1,24 @@
+# Whole chip: a pad in open-drain mode is never driven high, and no output register bit exists for
+# the input-only pins. Proved by induction over the complete top level.
+[options]
+mode prove
+depth 2
+
+[engines]
+smtbmc yices
+
+[script]
+read_verilog -sv bw_host_spi.v bw_imem.v bw_clkdiv.v bw_fifo.v bw_bau.v bw_sm.v
+read_verilog -formal -sv project.v
+prep -top tt_um_nnphanusf_bitweaver
+
+[files]
+../src/project.v
+../src/bw_defs.vh
+../src/bw_host_spi.v
+../src/bw_imem.v
+../src/bw_clkdiv.v
+../src/bw_fifo.v
+../src/bw_bau.v
+../src/bw_sm.v
+../src/bw_sm_formal.vh

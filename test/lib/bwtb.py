@@ -12,7 +12,7 @@ import random
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, FallingEdge, ReadOnly, RisingEdge
+from cocotb.triggers import ClockCycles, FallingEdge, Lock, ReadOnly, RisingEdge
 
 from bitweaver import regmap as R
 from bitweaver.asm import Program, assemble_one, instr
@@ -43,6 +43,7 @@ class TB:
         self.origin = 0
         self.first_bytes = (0, 0)
         self._mon = None
+        self._lock = Lock()  # host frames from concurrent tasks must not interleave
 
     # ------------------------------------------------------------------ setup
     async def start(self, reset_cycles: int = 5):
@@ -106,6 +107,10 @@ class TB:
 
     # ------------------------------------------------------------------ host SPI (mode 0, clock-synchronous)
     async def frame(self, data: bytes) -> bytes:
+        async with self._lock:
+            return await self._frame(data)
+
+    async def _frame(self, data: bytes) -> bytes:
         dut, half = self.dut, self.spi_half
         clk = dut.clk
         out = bytearray()
@@ -220,6 +225,38 @@ class TB:
             waited += poll
             if waited > timeout_cycles:
                 raise TimeoutError(f"SM{sm} TX FIFO did not drain")
+
+    async def push_all(self, sm: int, words, timeout_cycles: int = 400000, poll: int = 200):
+        """Push words without ever overflowing the TX FIFO (waits for space)."""
+        words = list(words)
+        waited = 0
+        depth = 4
+        while words:
+            space = depth - await self.tx_level(sm)
+            if space > 0:
+                await self.push(sm, words[:space])
+                words = words[space:]
+            else:
+                await self.cycles_(poll)
+                waited += poll
+                if waited > timeout_cycles:
+                    raise TimeoutError(f"SM{sm} TX FIFO stayed full")
+
+    async def collect(self, sm: int, count: int, timeout_cycles: int = 400000, poll: int = 200) -> list[int]:
+        """Pop `count` words from the RX FIFO as they arrive."""
+        out: list[int] = []
+        waited = 0
+        while len(out) < count:
+            n = min(await self.rx_level(sm), count - len(out))
+            if n:
+                out += await self.pop(sm, n)
+                waited = 0
+            else:
+                await self.cycles_(poll)
+                waited += poll
+                if waited > timeout_cycles:
+                    raise TimeoutError(f"SM{sm}: got {len(out)} of {count} words: {out}")
+        return out
 
     def done(self):
         self.check_ok()

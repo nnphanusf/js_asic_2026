@@ -93,8 +93,8 @@ module bw_fifo (
   end
 
 `ifdef FORMAL
-  // The join configuration is static between clears (the engine guarantees this by clearing the
-  // FIFOs on every write to FIFOCTRL).
+  // The join configuration only changes together with a clear (bw_sm clears both FIFOs on every
+  // write to FIFOCTRL).
   reg f_past = 1'b0;
   always @(posedge clk) f_past <= 1'b1;
   always @(posedge clk) begin
@@ -105,95 +105,80 @@ module bw_fifo (
   end
   initial assume (!rst_n);
 
-  // Reference model: track two arbitrary words pushed into each FIFO and check that they come out
-  // in order, exactly once (the classic two-token ordering proof).
+  // Basic invariants: counts within the configured depth and consistent with the pointers.
+  always @(posedge clk) begin
+    if (f_past && rst_n) begin
+      assert (tx_cnt <= tx_depth);
+      assert (rx_cnt <= rx_depth);
+      assert (tx_cnt[2:0] == tx_wp - tx_rp);
+      assert (rx_cnt[2:0] == rx_wp - rx_rp);
+    end
+  end
+
+  // Order preservation, by tracking two arbitrary values a and b pushed back to back into one FIFO.
+  // State 0: idle. 1: a is inside at `pos` places from the head. 2: b was the very next push.
+  // 3: a has left, so b must be at the head.
   (* anyconst *) reg [15:0] f_a;
   (* anyconst *) reg [15:0] f_b;
-  reg [1:0] f_tx_state, f_rx_state;  // 0 idle, 1 a is in, 2 a and b are in, 3 a is out
-  reg [3:0] f_tx_a_pos, f_rx_a_pos;  // number of pops until `a` is at the head
-  (* anyseq *) reg f_tx_mark, f_rx_mark;
+  (* anyconst *) reg f_watch_rx;  // which FIFO of the pair to watch
+  (* anyseq *) reg f_mark;
+  reg [1:0] f_st;
+  reg [3:0] f_pos;
+  wire        w_join = f_watch_rx ? jrx : jtx;
+  wire        w_push = f_watch_rx ? do_rx_push : do_tx_push;
+  wire        w_pop = f_watch_rx ? do_rx_pop : do_tx_pop;
+  wire [15:0] w_wdata = f_watch_rx ? rx_wdata : tx_wdata;
+  wire [15:0] w_head = f_watch_rx ? rx_rdata : tx_rdata;
+  wire [3:0]  w_cnt = f_watch_rx ? rx_cnt : tx_cnt;
+  wire        w_empty = f_watch_rx ? rx_empty : tx_empty;
+  wire [2:0]  w_rp = f_watch_rx ? rx_rp : tx_rp;
+  wire [2:0]  w_base = f_watch_rx ? 3'b100 : 3'b000;  // physical half used when not joined
+  wire [2:0]  w_a_lin = w_rp + f_pos[2:0];
+  wire [2:0]  w_b_lin = w_rp + f_pos[2:0] + 3'd1;
+  wire [2:0]  w_a_idx = w_join ? w_a_lin : (w_base | {1'b0, w_a_lin[1:0]});
+  wire [2:0]  w_b_idx = w_join ? w_b_lin : (w_base | {1'b0, w_b_lin[1:0]});
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      f_tx_state <= 2'd0;
-      f_rx_state <= 2'd0;
-      f_tx_a_pos <= 4'd0;
-      f_rx_a_pos <= 4'd0;
+      f_st  <= 2'd0;
+      f_pos <= 4'd0;
     end else if (clr) begin
-      f_tx_state <= 2'd0;
-      f_rx_state <= 2'd0;
+      f_st <= 2'd0;
     end else begin
-      case (f_tx_state)
-        2'd0: if (do_tx_push && f_tx_mark && tx_wdata == f_a) begin
-          f_tx_state <= 2'd1;
-          f_tx_a_pos <= tx_cnt - {3'd0, do_tx_pop};
+      case (f_st)
+        2'd0: if (w_push && f_mark && w_wdata == f_a) begin
+          f_st  <= 2'd1;
+          f_pos <= w_cnt - {3'd0, w_pop};
         end
         2'd1: begin
-          if (do_tx_pop) f_tx_a_pos <= f_tx_a_pos - 4'd1;
-          if (do_tx_push && tx_wdata == f_b) f_tx_state <= 2'd2;
-          else if (do_tx_push) f_tx_state <= 2'd0;  // something else followed: stop tracking
-          else if (do_tx_pop && f_tx_a_pos == 4'd0) f_tx_state <= 2'd0;
-        end
-        2'd2: begin
-          if (do_tx_pop) begin
-            f_tx_a_pos <= f_tx_a_pos - 4'd1;
-            if (f_tx_a_pos == 4'd0) f_tx_state <= 2'd3;
+          if (w_pop && f_pos == 4'd0) f_st <= 2'd0;
+          else begin
+            f_pos <= f_pos - {3'd0, w_pop};
+            if (w_push) f_st <= (w_wdata == f_b) ? 2'd2 : 2'd0;
           end
         end
-        default: if (do_tx_pop) f_tx_state <= 2'd0;
-      endcase
-      case (f_rx_state)
-        2'd0: if (do_rx_push && f_rx_mark && rx_wdata == f_a) begin
-          f_rx_state <= 2'd1;
-          f_rx_a_pos <= rx_cnt - {3'd0, do_rx_pop};
-        end
-        2'd1: begin
-          if (do_rx_pop) f_rx_a_pos <= f_rx_a_pos - 4'd1;
-          if (do_rx_push && rx_wdata == f_b) f_rx_state <= 2'd2;
-          else if (do_rx_push) f_rx_state <= 2'd0;
-          else if (do_rx_pop && f_rx_a_pos == 4'd0) f_rx_state <= 2'd0;
-        end
         2'd2: begin
-          if (do_rx_pop) begin
-            f_rx_a_pos <= f_rx_a_pos - 4'd1;
-            if (f_rx_a_pos == 4'd0) f_rx_state <= 2'd3;
-          end
+          if (w_pop && f_pos == 4'd0) f_st <= 2'd3;
+          else f_pos <= f_pos - {3'd0, w_pop};
         end
-        default: if (do_rx_pop) f_rx_state <= 2'd0;
+        default: if (w_pop) f_st <= 2'd0;
       endcase
     end
   end
 
-  wire [2:0] f_tx_a_idx = {jtx & (tx_rp[2] ^ (f_tx_a_pos[2] ^ ((tx_rp[1:0] + f_tx_a_pos[1:0]) < tx_rp[1:0]))),
-                           tx_rp[1:0] + f_tx_a_pos[1:0]};
-  wire [2:0] f_rx_a_idx = {~jrx | (rx_rp[2] ^ (f_rx_a_pos[2] ^ ((rx_rp[1:0] + f_rx_a_pos[1:0]) < rx_rp[1:0]))),
-                           rx_rp[1:0] + f_rx_a_pos[1:0]};
-
   always @(posedge clk) begin
-    if (rst_n) begin
-      // No overflow, no underflow, consistent pointers.
-      assert (tx_cnt <= tx_depth || tx_cnt <= 4'd8);
-      assert (tx_cnt <= 4'd8 && rx_cnt <= 4'd8);
-      if (!jtx) assert (tx_cnt <= 4'd4 || jrx);
-      assert (tx_cnt[2:0] == (tx_wp - tx_rp) || tx_cnt == 4'd8 || (!jtx && tx_cnt[1:0] == (tx_wp[1:0] - tx_rp[1:0])));
-      assert (rx_cnt[2:0] == (rx_wp - rx_rp) || rx_cnt == 4'd8 || (!jrx && rx_cnt[1:0] == (rx_wp[1:0] - rx_rp[1:0])));
-      // While `a` is tracked it is still stored where the model says.
-      if (f_tx_state == 2'd1 || f_tx_state == 2'd2) begin
-        assert (f_tx_a_pos < tx_cnt);
-        assert (mem[f_tx_a_idx] == f_a);
+    if (f_past && rst_n) begin
+      if (f_st == 2'd1 || f_st == 2'd2) begin
+        assert (f_pos < w_cnt);
+        assert (mem[w_a_idx] == f_a);
       end
-      if (f_rx_state == 2'd1 || f_rx_state == 2'd2) begin
-        assert (f_rx_a_pos < rx_cnt);
-        assert (mem[f_rx_a_idx] == f_a);
+      if (f_st == 2'd2) begin
+        assert (f_pos + 4'd1 < w_cnt);
+        assert (mem[w_b_idx] == f_b);
       end
-      // Order: when `a` has just left, the next word out is `b`.
-      if (f_tx_state == 2'd3) begin
-        assert (!tx_empty);
-        assert (tx_rdata == f_b);
-      end
-      if (f_rx_state == 2'd3) begin
-        assert (!rx_empty);
-        assert (rx_rdata == f_b);
+      if (f_st == 2'd3) begin
+        assert (!w_empty);
+        assert (w_head == f_b);
       end
     end
   end
@@ -202,8 +187,8 @@ module bw_fifo (
     cover (rst_n && tx_full && jtx);
     cover (rst_n && rx_full && jrx);
     cover (rst_n && tx_full && rx_full && !jtx && !jrx);
-    cover (rst_n && f_tx_state == 2'd3);
-    cover (rst_n && f_rx_state == 2'd3);
+    cover (rst_n && f_st == 2'd3 && !f_watch_rx && jtx);
+    cover (rst_n && f_st == 2'd3 && f_watch_rx && !jrx);
   end
 `endif
 

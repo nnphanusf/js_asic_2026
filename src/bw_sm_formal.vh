@@ -4,6 +4,18 @@
   always @(posedge clk) f_past <= 1'b1;
   initial assume (!rst_n);
 
+  // Environment: the instruction memory is not rewritten under the address being executed, i.e. the
+  // fetched word only changes when the fetch address changes. (Rewriting the instruction under a
+  // stalled WAIT or IRQ WAIT is allowed by the hardware and modelled by the ISS, but the new
+  // instruction then inherits the wait's progress flags; docs/isa.md says so.)
+  always @(posedge clk) begin
+    if (f_past && rst_n && $past(rst_n) && pc_next == $past(pc_next))
+      assume (imem_rdata == $past(imem_rdata));
+  end
+  // The host port performs at most one register write per cycle: a restart (a CTRL write) never
+  // coincides with a write to this engine's registers.
+  always @(*) assume (!(restart && cfg_we));
+
   wire f_in_wrap = (pc >= r_wrap_bot) && (pc <= r_wrap_top);
   wire f_no_jump = !(run && done && (jump_imm || jump_data));
 

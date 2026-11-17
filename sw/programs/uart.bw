@@ -14,6 +14,7 @@
 ; Pull a word from the TX FIFO and send its low DATA_BITS bits. The line idles high.
 .side_set 1 opt
 .pins out=9 set=9 side=9 out_count=1 set_count=1
+.fifo join_tx                      ; transmit only: one 8-deep TX FIFO
 .init set pins, 1
 .init set pindirs, 1
     pull               side 1 [7]   ; stop bit, or idle while the FIFO is empty
@@ -27,6 +28,7 @@ bitloop:
 ; raises IRQ flag 4 (relative to the engine) and is dropped.
 .pins in=3 jmp=3
 .shift in=right
+.fifo join_rx                      ; receive only: one 8-deep RX FIFO
 start:
     wait 0 pin 0                   ; start bit
     set x, DATA_BITS-1 [10]        ; wait until the middle of the first data bit

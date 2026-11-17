@@ -1,0 +1,22 @@
+# Host SPI port: legal phase/bit-counter states, single-cycle strobes that only follow a real SCK edge,
+# MISO quiet while deselected, and no deadlock: one cycle of CS_N high always returns the port to idle.
+[tasks]
+prove
+cover
+
+[options]
+prove: mode prove
+cover: mode cover
+cover: depth 80
+
+[engines]
+prove: abc pdr
+cover: smtbmc
+
+[script]
+read_verilog -formal -sv bw_host_spi.v
+prep -top bw_host_spi
+
+[files]
+../src/bw_host_spi.v
+../src/bw_defs.vh

@@ -316,6 +316,7 @@ module tt_um_nnphanusf_bitweaver (
   assign uio_oe  = pin_oe[18:11] & ~(pad_od[18:11] & pin_out[18:11]);
 
 `ifdef FORMAL
+  initial assume (!rst_n);
   // Open-drain pins never drive high.
   always @(*) begin
     if (rstn) begin

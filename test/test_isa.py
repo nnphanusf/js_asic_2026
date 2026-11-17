@@ -570,3 +570,31 @@ async def test_bau_destuff_error(dut):
     await tb.exec(0, "jmp pin 5")
     assert await tb.stat(0) & 63 == 5
     tb.done()
+
+
+@cocotb.test()
+async def test_bau_stuff_bit_into_register(dut):
+    """Closes the last functional-coverage hole: OUT X, BAU while a stuff bit is due.
+
+    With STUFF_N = 1 every 1 is followed by a stuff 0. OUT with BAU writes the encoded pair
+    {~level, level}: the data bit 1 gives 0b01, the stuff bit that follows gives 0b10, and the OSR does
+    not shift for the stuff bit.
+    """
+    src = """
+.bau stuff=1 ones
+    pull
+    set bau, BAU_RESET | BAU_STUFF
+    out x, bau             ; data bit 1 -> X = 0b01
+    mov isr, x
+    push
+    out x, bau             ; stuff bit 0 -> X = 0b10
+    mov isr, x
+    push
+    out x, bau             ; next data bit 1 again
+    mov isr, x
+    push
+h:  jmp h
+"""
+    tb = await setup(dut, src, pushes=[0xFFFF])
+    assert await tb.pop(0, 3) == [0b01, 0b10, 0b01]
+    tb.done()

@@ -134,9 +134,10 @@ module bw_host_spi (
 `ifdef FORMAL
   reg f_past = 1'b0;
   always @(posedge clk) f_past <= 1'b1;
+  initial assume (!rst_n);
 
   always @(posedge clk) begin
-    if (f_past && rst_n) begin
+    if (f_past && rst_n && $past(rst_n)) begin
       // The phase register only ever holds a legal state.
       assert (phase != 2'd3);
       // The byte phases never count past eight bits.

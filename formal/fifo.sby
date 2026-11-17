@@ -1,0 +1,22 @@
+# FIFO pair: no overflow or underflow, consistent pointers, and order preservation (two arbitrary
+# words pushed back to back leave in the same order), in normal, joined-TX and joined-RX modes.
+[tasks]
+prove
+cover
+
+[options]
+prove: mode prove
+prove: depth 24
+cover: mode cover
+cover: depth 40
+
+[engines]
+prove: abc pdr
+cover: smtbmc
+
+[script]
+read_verilog -formal -sv bw_fifo.v
+prep -top bw_fifo
+
+[files]
+../src/bw_fifo.v

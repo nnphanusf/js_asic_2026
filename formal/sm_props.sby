@@ -1,0 +1,34 @@
+# One engine with an unconstrained instruction stream (imem_rdata is a free input), free pins, IRQ
+# flags, timestamp and host register traffic. Proves shift-counter bounds, clean restart, IR/PC
+# consistency, that PC stays inside the wrap range without a jump, and that a disabled engine does
+# not move. Cover finds a trace for every opcode completing.
+[tasks]
+bmc
+prove
+cover
+
+[options]
+bmc: mode bmc
+bmc: depth 24
+prove: mode prove
+prove: depth 8
+cover: mode cover
+cover: depth 24
+
+[engines]
+bmc: smtbmc boolector
+prove: abc pdr
+cover: smtbmc boolector
+
+[script]
+read_verilog -formal -sv bw_clkdiv.v bw_fifo.v bw_bau.v
+read_verilog -formal -sv -DFORMAL bw_sm.v
+prep -top bw_sm
+
+[files]
+../src/bw_sm.v
+../src/bw_sm_formal.vh
+../src/bw_defs.vh
+../src/bw_clkdiv.v
+../src/bw_fifo.v
+../src/bw_bau.v

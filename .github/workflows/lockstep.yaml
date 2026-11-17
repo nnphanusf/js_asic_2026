@@ -1,0 +1,30 @@
+name: lockstep
+on: [push, workflow_dispatch]
+jobs:
+  lockstep:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Install OSS CAD Suite
+        uses: YosysHQ/setup-oss-cad-suite@v3
+
+      - name: Constrained-random lock-step, RTL against the reference model (10M cycles)
+        run: |
+          cd verif/lockstep
+          make cov SEEDS=50 CYCLES=200000 JOBS=4
+          python3 cov_report.py
+          verilator_coverage --write coverage/merged.dat coverage/cov_*.dat
+          verilator_coverage coverage/merged.dat | tee coverage/summary.txt
+
+      - name: Upload log and coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lockstep
+          path: |
+            verif/lockstep/lockstep_log.jsonl
+            verif/lockstep/coverage/functional.json
+            verif/lockstep/coverage/summary.txt
+            verif/lockstep/work/

@@ -1,0 +1,27 @@
+name: formal
+on: [push, workflow_dispatch]
+jobs:
+  formal:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        job: [fifo, host_spi, sm_props, opendrain]
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Install OSS CAD Suite
+        uses: YosysHQ/setup-oss-cad-suite@v3
+
+      - name: Run SymbiYosys
+        run: |
+          cd formal
+          sby -f ${{ matrix.job }}.sby
+
+      - name: Upload counterexamples
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: formal-${{ matrix.job }}
+          path: formal/${{ matrix.job }}*/
