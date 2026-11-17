@@ -3,12 +3,52 @@
 Deadline 2027-01-18 (RTL freeze 2027-01-08). See `PLAN.md` for the full brief. This file is the running log:
 what is done, what is next, and every decision with its reason.
 
+## Final report (2026-11-17)
+
+**What was built.** Bitweaver, `tt_um_nnphanusf_bitweaver`, 8x4 tiles on IHP SG13CMOS5L at 60 MHz: four
+programmable bit-banging engines sharing a 64 x 16-bit instruction memory, a PIO-class ISA extended with a timed
+WAIT, a bit-level assist unit (NRZI, bit stuffing, Manchester, programmable CRC), open-drain pads, input glitch
+filters, a timestamp source, FIFO joining and chaining, and a register-mapped SPI host port. Toolchain in
+`sw/bitweaver` (register map as single source of truth, assembler, loader, cycle-accurate simulator), a MicroPython
+driver for the demo board, 18 protocol programs and the documentation set in `docs/`.
+
+**Protocols working** (each against an independent model of the other end): UART 9600–921600 baud 8N1/8E1, SPI
+controller modes 0–3 up to 7.5 MHz, SPI target, I2C controller at 100 and 400 kHz with every timing limit checked,
+I2C target (two engines), WS2812, JTAG, SWD, PS/2, CAN 2.0A at 500 kbit/s and 1 Mbit/s, low-speed USB packets,
+1-Wire, and UART + UART + SPI + I2C on four engines at once.
+
+**Verification.**
+- pytest: 74 tests (assembler, simulator rules, generated files, every program, board driver).
+- cocotb: 53 tests, all in cycle-by-cycle lock-step with the simulator; all pass at RTL and on the Yosys/IHP
+  gate-level netlist locally.
+- Constrained-random lock-step (Verilator): 100M cycles over 1000 seeds, no mismatch; CI runs 10M per push.
+- Formal (SymbiYosys): FIFO ordering, host-port no-deadlock, engine invariants (PC within wrap range etc.) and
+  open drain all proved unbounded; covers reached for every opcode.
+- Coverage: functional 465/465 bins; Verilator line 100 %, toggle 99.1 % (the 69 missing points are constant bits).
+
+**Area and timing.** 27.4K IHP cells, about 386 000 um2, about 39 % of the 8x4 core (Yosys + ABC). ABC critical
+path estimate 9.07 ns at the slow corner without wire load, against 16.67 ns. LibreLane numbers: see CI status.
+
+**Cut.** 10BASE-T (host port bandwidth below the line rate; see decisions). Nothing else from PLAN was cut;
+1-Wire was added for the programming guide.
+
+**CI status at the end of this session.** `test`, `docs` and `lockstep` green on a1e294a. `formal`: three of four
+jobs green on a1e294a; `sm_props` failed only because the OSS CAD Suite download hit GitHub's anonymous API rate
+limit; fixed in b1aa1da (passes `GITHUB_TOKEN` to the setup action), not yet pushed. `gds` for the full design:
+two hardening runs of the full design (793167b and a1e294a; the RTL is identical apart from
+`ifdef FORMAL` blocks) were still in progress after 3 h 15 min and 1 h 44 min; results go into `docs/results.md`.
+
+**Steps left for the human.**
+1. The repository was switched to private during this session, so CI status could only be read through the
+   signed-in browser, and Actions minutes now count against the account's quota (each `gds` run is roughly
+   three hours of runner time). Make it public again (needed for the submission anyway) or check the quota.
+2. Push the local commits (`git push origin phase0-setup`) and confirm `formal` goes green and `gds`, `precheck`,
+   `gl_test` and `viewer` pass; then merge `phase0-setup` into `main`.
+3. Optionally skim `docs/` (architecture, ISA, programming guide, verification, results, AI usage).
+4. Submit through the Jane Street form when it is posted (deadline 2027-01-18; RTL freeze 2027-01-08).
+
 ## Status at a glance (2026-11-17)
-- Phases 0–4 are done locally: spec, toolchain, RTL, core protocols, verification depth, stretch protocols.
-- Phase 5 (write-up) is drafted: architecture, ISA, programming guide, verification, results, AI usage.
-- Waiting on CI for the full design: the first `gds` run of the complete RTL (commit 793167b) was still routing
-  after 80 minutes. The later commits need a push and a green run of `gds`, `precheck`, `gl_test`, `test`,
-  `lockstep` and `formal`.
+- Phases 0–5 are done locally; see the final report above for what remains in CI.
 
 ## Phase 0: Setup and spec
 - [x] Repo from `ttihp-verilog-template`; OSS CAD Suite 2026-11-16 in `~/tools/oss-cad-suite`
