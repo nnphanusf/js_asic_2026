@@ -20,8 +20,14 @@ work was checked by tools rather than taken on trust.
   Actions runs, and fixed what they reported.
 - Kept `PROGRESS.md` as a running log of decisions and their reasons.
 
-Models used: Claude Fable 5.2 for the early sessions (toolchain, simulator, first RTL) and Claude Opus 5.5 from the
-lock-step testbench onwards.
+Models used: Claude Fable 5.2 wrote the register map, instruction-set simulator, assembler, loader and the
+engine-level RTL modules (`bw_sm`, `bw_fifo`, `bw_bau`, `bw_clkdiv`, `bw_imem`, `bw_host_spi`). Claude Opus 5.5 took
+over at the top-level integration (`project.v`) and wrote the lock-step testbench, the protocol programs and models,
+the random and formal verification and the documentation.
+
+The agent worked from `PLAN.md` with one instruction from the human: run all phases in one go and stop only for
+account or payment matters or changes to the fixed facts (top module, tiles, pins, deadline). Decisions it made on
+its own are logged with their reasons in `PROGRESS.md`.
 
 ## What was checked by tools instead of trusted
 
