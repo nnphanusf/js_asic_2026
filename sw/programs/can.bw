@@ -1,0 +1,94 @@
+; CAN 2.0A (classical CAN, 11-bit identifiers): transmitter and receiver.
+;
+; Every bit takes 10 ticks: clkdiv 12 gives 500 kbit/s, clkdiv 6 gives 1 Mbit/s. The bit-level assist
+; unit does the CAN-specific work:
+;   * bit stuffing: after five equal bits, a complement bit (BAU_CFG: STUFF_N = 5, STUFF_ANY);
+;   * CRC15 (polynomial 0x4599, BAU_POLY = 0x4CD1 bit-reversed) over SOF .. data, computed while
+;     transmitting.
+; Pins (a CAN transceiver on the Pmod header): TX = PIN11 (uio[0]), RX = PIN12 (uio[1]).
+; Limits: hard synchronization on SOF only (fine with crystal oscillators; no resynchronization on
+; later edges), no arbitration loss detection, no automatic retransmission, no error frames.
+
+.define RX 12                 ; the receiver's pin; assemble with RX=<pin> to move it
+
+.program can_tx
+; Host: push the frame from SOF to the end of the data field, unstuffed, as a bit count minus one
+; followed by the bits MSB first in 16-bit words (bitweaver.proto.can_tx_words). The program stuffs,
+; appends the CRC (stuffed), the delimiters and EOF, and raises IRQ flag 0 (relative) if no node ACKs.
+; Timing: inside every 10-tick bit period the pin changes at tick 3.
+.pins out=11 out_count=1 set=11 set_count=1 in=RX jmp=STUFF dirs=11 high=11
+.bau poly=0x4CD1 stuff=5 any
+.shift out=left
+.fifo join_tx
+.timeout 0
+.wrap_target
+    pull                      ; header: bit count - 1
+    out x, 16                 ; (empties the OSR)
+    mov crc, null
+    set bau, BAU_RESET | BAU_STUFF | BAU_CRC
+bits:                         ; tick 0 of a bit period
+    jmp pin stuff             ; virtual pin 21: the next bit is a stuff bit
+    pull ifempty              ; 1: refill the OSR every 16 bits (no-op otherwise)
+    jmp !x last               ; 2
+    out pins, bau [5]         ; 3..8: a data bit, through CRC and stuffing
+    jmp x-- bits              ; 9
+stuff:
+    nop [1]                   ; 1..2
+    out pins, bau [5]         ; 3..8: the stuff bit (the OSR does not shift)
+    jmp bits                  ; 9
+last:
+    out pins, bau             ; 3: the last data bit
+    set bau, BAU_STUFF        ; 4: stop the CRC, keep stuffing
+    mov osr, ::crc            ; 5: CRC MSB first (the register holds it bit-reversed)
+    set x, 14 [3]             ; 6..9
+cbits:
+    jmp pin cstuff            ; 0
+    nop                       ; 1
+    jmp !x clast              ; 2
+    out pins, bau [5]         ; 3..8
+    jmp x-- cbits             ; 9
+cstuff:
+    nop [1]
+    out pins, bau [5]
+    jmp cbits
+clast:
+    out pins, bau             ; 3: last CRC bit
+    set bau, 0 [8]            ; 4..12
+    set pins, 1 [9]           ; 13..22: CRC delimiter (recessive)
+    nop [5]                   ; 23..28: ACK slot, we stay recessive
+    wait 0 pin 0 timeout      ; 29: dominant means some node acknowledged: skip the next instruction
+    irq 0 rel                 ; no ACK
+    nop [31]                  ; ACK delimiter, EOF and intermission: at least 10 recessive bits
+    nop [31]
+    nop [31]
+    nop [31]
+.wrap
+
+.program can_rx
+; Receives every frame on the bus. Destuffed bits from SOF onwards are pushed MSB first in 16-bit
+; words; the frame ends at the first stuff error, which is the end-of-frame field (six recessive
+; bits). Then the partial last word (right aligned) and the number of bits are pushed.
+; bitweaver.proto.can_rx_decode turns the words into (id, data, crc_ok).
+.pins in=RX jmp=BERR
+.bau stuff=5 any
+.shift in=left autopush=16
+.fifo join_rx
+.timeout 0
+idle:
+    wait 0 pin 0              ; SOF: hard synchronization on the falling edge
+    set bau, BAU_RESET | BAU_STUFF
+    mov x, !null [2]          ; X counts data bits down from 0xFFFF; sample at ~70 % of each bit
+.wrap_target
+bit:
+    wait 1 pin STUFF-RX timeout  ; a stuff bit is due: skip the counting instruction
+    jmp x-- count
+    nop
+count:
+    in pins, bau [6]          ; a data bit, or a stuff bit that is checked and dropped
+    jmp pin done              ; stuff error: end of frame
+.wrap
+done:
+    push                      ; partial last word
+    mov isr, !x
+    push                      ; number of bits
+    jmp idle

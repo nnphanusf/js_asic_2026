@@ -1,0 +1,142 @@
+"""A classical CAN node for cocotb, written from the CAN 2.0A specification (ISO 11898-1).
+
+It has its own frame encoder, bit stuffing and CRC15, independent of bitweaver.proto. The bus is
+modelled as a wired AND: the level on the design's RX pad is (design TX) AND (model TX).
+"""
+
+from __future__ import annotations
+
+import cocotb
+from cocotb.triggers import FallingEdge, Timer
+
+
+def crc15(bits):
+    reg = 0
+    for b in bits:
+        top = (reg >> 14) & 1
+        reg = (reg << 1) & 0x7FFF
+        if b != top:
+            reg ^= 0x4599
+    return reg
+
+
+def stuff(bits):
+    out, run, last = [], 0, None
+    for b in bits:
+        out.append(b)
+        run = run + 1 if b == last else 1
+        last = b
+        if run == 5:
+            out.append(1 - b)
+            last, run = 1 - b, 1
+    return out
+
+
+def encode(ident, data):
+    f = [0] + [(ident >> i) & 1 for i in range(10, -1, -1)] + [0, 0, 0]
+    f += [(len(data) >> i) & 1 for i in range(3, -1, -1)]
+    for byte in data:
+        f += [(byte >> i) & 1 for i in range(7, -1, -1)]
+    c = crc15(f)
+    f += [(c >> i) & 1 for i in range(14, -1, -1)]
+    s = stuff(f)
+    ack_index = len(s) + 1
+    return s + [1, 1, 1] + [1] * 7, ack_index  # CRC delimiter, ACK slot, ACK delimiter, EOF
+
+
+class CanBus:
+    """Wired-AND bus between the design (tx_pad -> rx_drive) and one model node."""
+
+    def __init__(self, tx_pad, rx_drive):
+        self.tx_pad, self.rx_drive = tx_pad, rx_drive
+        self.model_level = 1
+        self.rx_drive.value = 1
+        cocotb.start_soon(self._watch())
+
+    def level(self) -> int:
+        return int(self.tx_pad.value) & self.model_level
+
+    def drive(self, level: int):
+        self.model_level = level
+        self.rx_drive.value = self.level()
+
+    async def _watch(self):
+        while True:
+            await self.tx_pad.value_change
+            self.rx_drive.value = self.level()
+
+
+class CanNode:
+    def __init__(self, bus: CanBus, bitrate: float, ack: bool = True):
+        self.bus, self.ack = bus, ack
+        self.bit_ns = round(1e9 / bitrate)
+        self.received: list[tuple] = []  # (ident, data, crc_ok, stuff_ok)
+        self.transmitting = False
+        cocotb.start_soon(self._rx())
+
+    async def send(self, ident: int, data=b"") -> bool:
+        """Transmit one frame; returns True if some other node acknowledged it."""
+        bits, ack_i = encode(ident, bytes(data))
+        self.transmitting = True
+        acked = False
+        for i, b in enumerate(bits):
+            self.bus.drive(b)
+            if i == ack_i:
+                await Timer(round(self.bit_ns * 0.7), "ns")
+                acked = self.bus.level() == 0
+                await Timer(self.bit_ns - round(self.bit_ns * 0.7), "ns")
+            else:
+                await Timer(self.bit_ns, "ns")
+        self.bus.drive(1)
+        await Timer(3 * self.bit_ns, "ns")  # intermission
+        self.transmitting = False
+        return acked
+
+    async def _rx(self):
+        while True:
+            await FallingEdge(self.bus.rx_drive)
+            if self.transmitting:
+                continue
+            await Timer(round(self.bit_ns * 0.7), "ns")
+            raw = []
+            bits = []
+            run, last, stuff_ok = 0, None, True
+
+            def take(b):
+                nonlocal run, last, stuff_ok
+                raw.append(b)
+                if run == 5:  # this is a stuff bit
+                    if b == last:
+                        stuff_ok = False
+                    run, last = 1, b
+                    return False
+                run = run + 1 if b == last else 1
+                last = b
+                bits.append(b)
+                return True
+
+            def need():
+                if len(bits) < 19:
+                    return 19 + 15
+                dlc = min(int("".join(map(str, bits[15:19])), 2), 8)
+                return 19 + 8 * dlc + 15
+
+            while len(bits) < need():
+                take(self.bus.level())
+                await Timer(self.bit_ns, "ns")
+            ident = int("".join(map(str, bits[1:12])), 2)
+            dlc = min(int("".join(map(str, bits[15:19])), 2), 8)
+            end = 19 + 8 * dlc
+            data = bytes(int("".join(map(str, bits[19 + 8 * i:27 + 8 * i])), 2) for i in range(dlc))
+            crc_ok = crc15(bits[:end]) == int("".join(map(str, bits[end:end + 15])), 2)
+            # We are at 70 % of the CRC delimiter's bit time... unless the CRC ended with a stuff bit.
+            if run == 5:
+                await Timer(self.bit_ns, "ns")  # skip the trailing stuff bit
+            # Now 70 % into the CRC delimiter. The ACK slot starts 0.3 bit times later.
+            await Timer(self.bit_ns - round(self.bit_ns * 0.7), "ns")
+            if self.ack and crc_ok and stuff_ok:
+                self.bus.drive(0)
+                await Timer(self.bit_ns, "ns")
+                self.bus.drive(1)
+            self.received.append((ident, data, crc_ok, stuff_ok))
+            await Timer(9 * self.bit_ns, "ns")  # ACK delimiter, EOF

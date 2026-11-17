@@ -230,3 +230,52 @@ def ps2_decode(word: int) -> tuple[int, bool]:
     data = (f >> 1) & 0xFF
     ok = (f & 1) == 0 and (f >> 10) & 1 == 1 and (bin(data).count("1") + ((f >> 9) & 1)) & 1 == 1
     return data, ok
+
+
+# ---------------------------------------------------------------- CAN (can.bw)
+def can_crc15(bits) -> int:
+    crc = 0
+    for b in bits:
+        nxt = b ^ ((crc >> 14) & 1)
+        crc = (crc << 1) & 0x7FFF
+        if nxt:
+            crc ^= 0x4599
+    return crc
+
+
+def can_frame_bits(ident: int, data=b"", rtr: bool = False) -> list[int]:
+    """Unstuffed bits of a classical base frame from SOF to the end of the data field."""
+    data = bytes(data)
+    assert 0 <= ident < 2048 and len(data) <= 8
+    bits = [0] + [(ident >> i) & 1 for i in range(10, -1, -1)] + [int(rtr), 0, 0]
+    bits += [(len(data) >> i) & 1 for i in range(3, -1, -1)]
+    for byte in data:
+        bits += [(byte >> i) & 1 for i in range(7, -1, -1)]
+    return bits
+
+
+def can_tx_words(ident: int, data=b"", rtr: bool = False) -> list[int]:
+    """TX FIFO words for can_tx: bit count - 1, then the bits MSB first."""
+    bits = can_frame_bits(ident, data, rtr)
+    padded = bits + [0] * (-len(bits) % 16)
+    return [len(bits) - 1] + [int("".join(map(str, padded[i:i + 16])), 2) for i in range(0, len(padded), 16)]
+
+
+def can_rx_decode(words) -> tuple[int, bytes, bool]:
+    """(identifier, data, CRC correct) from the words can_rx pushed for one frame."""
+    count = words[-1]
+    full, rest = divmod(count, 16)
+    bits = []
+    for w in words[:full]:
+        bits += [(w >> i) & 1 for i in range(15, -1, -1)]
+    bits += [(words[full] >> i) & 1 for i in range(rest - 1, -1, -1)]
+
+    def field(start, n):
+        return sum(bits[start + i] << (n - 1 - i) for i in range(n))
+
+    ident = field(1, 11)
+    dlc = min(field(15, 4), 8)
+    data = bytes(field(19 + 8 * i, 8) for i in range(dlc))
+    end = 19 + 8 * dlc
+    crc = field(end, 15)
+    return ident, data, crc == can_crc15(bits[:end])
