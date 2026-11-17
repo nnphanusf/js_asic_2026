@@ -1,0 +1,315 @@
+"""Host-side helpers: build the register writes that load and configure a program.
+
+Everything here is a pure function of its arguments, so the same code drives the simulator, the
+cocotb testbench and the MicroPython driver. A transport only has to implement
+
+    write(addr, words, inc=False)      one SPI write frame
+    read(addr, count=1, inc=False)     one SPI read frame, returns a list of words
+"""
+
+from __future__ import annotations
+
+from . import regmap as R
+from .asm import Program, enc_jmp
+
+_CFG_KEYS = {
+    "clkdiv", "clkdiv_int", "clkdiv_frac", "in_base", "out_base", "set_base", "side_base", "jmp_pin",
+    "out_count", "set_count", "in_shiftdir", "out_shiftdir", "autopush", "autopull", "push_thresh",
+    "pull_thresh", "join_tx", "join_rx", "chain_src", "tmo", "bau_poly", "stuff_n", "stuff_any",
+    "od_pins", "filter_pins",
+}
+
+
+def clkdiv_fields(div: float) -> tuple[int, int]:
+    """Split a divider such as 65.104 into the CLKDIV_INT and CLKDIV_FRAC register values."""
+    fixed = round(div * 256)
+    if not 256 <= fixed <= 65536 * 256:
+        raise ValueError(f"clock divider {div} is out of range (1 .. 65536)")
+    return (fixed >> 8) & 0xFFFF, fixed & 0xFF
+
+
+def frame_bytes(addr: int, words=(), count: int = 0, write: bool = True, inc: bool = False) -> bytes:
+    """Bytes the host sends in one SPI frame (CS_N low for the whole frame)."""
+    out = bytearray([(R.CMD_WRITE if write else 0) | (R.CMD_INC if inc else 0), addr & 0xFF])
+    if write:
+        for w in words:
+            out += bytes([(w >> 8) & 0xFF, w & 0xFF])
+    else:
+        out += bytes(2 * count)
+    return bytes(out)
+
+
+def sm_config(prog: Program, origin: int, **overrides) -> list[int]:
+    """The eleven configuration words CLKDIV_INT .. BAU_CFG for a program placed at `origin`."""
+    c = dict(prog.config)
+    for k, v in overrides.items():
+        if k not in _CFG_KEYS:
+            raise KeyError(f"unknown configuration key '{k}'")
+        c[k] = v
+    if "clkdiv" in c:
+        c["clkdiv_int"], c["clkdiv_frac"] = clkdiv_fields(c["clkdiv"])
+    g = c.get
+    if len(prog.code) + origin > R.IMEM_DEPTH:
+        raise ValueError(f"program '{prog.name}' does not fit at origin {origin}")
+    return [
+        g("clkdiv_int", 1) & 0xFFFF,
+        g("clkdiv_frac", 0),
+        R.pack("WRAP", bottom=origin + prog.wrap_target, top=origin + prog.wrap),
+        R.pack("ORG", org=origin, jmp_pin=g("jmp_pin", 0)),
+        R.pack("PINCTRL0", in_base=g("in_base", 0), out_base=g("out_base", 0), set_base=g("set_base", 0)),
+        R.pack("PINCTRL1", side_base=g("side_base", 0), out_count=g("out_count", 0),
+               set_count=g("set_count", 0), side_count=prog.side_count, side_en=int(prog.side_opt)),
+        R.pack("SHIFTCTRL", push_thresh=g("push_thresh", 16) & 15, pull_thresh=g("pull_thresh", 16) & 15,
+               autopush=g("autopush", 0), autopull=g("autopull", 0), in_shiftdir=g("in_shiftdir", 1),
+               out_shiftdir=g("out_shiftdir", 1), side_pindir=int(prog.side_pindirs)),
+        R.pack("FIFOCTRL", join_tx=g("join_tx", 0), join_rx=g("join_rx", 0),
+               chain_en=int("chain_src" in c), chain_src=g("chain_src", 0)),
+        g("tmo", 0),
+        g("bau_poly", 0),
+        R.pack("BAU_CFG", stuff_n=g("stuff_n", 0), stuff_any=g("stuff_any", 0)),
+    ]
+
+
+def pin_mask(pins) -> int:
+    m = 0
+    for p in pins or ():
+        m |= 1 << p
+    return m
+
+
+def load_ops(prog: Program, sm: int, origin: int, en_shadow: int = 0, write_code: bool = True,
+             **overrides) -> list[tuple[int, list[int], bool]]:
+    """Register writes that load `prog` into engine `sm`, leaving it disabled and ready to enable.
+
+    Returns a list of (address, words, auto_increment) frames. `en_shadow` is the current CTRL.EN
+    value; the engine being loaded is disabled first and the others are left alone.
+    """
+    en = en_shadow & ~(1 << sm) & 0xF
+    ops: list[tuple[int, list[int], bool]] = [(R.addr("CTRL"), [en], False)]
+    if write_code:
+        ops.append((R.IMEM_BASE + origin, list(prog.code), True))
+    ops.append((R.addr("CLKDIV_INT", sm), sm_config(prog, origin, **overrides), True))
+    ops.append((R.addr("CTRL"), [en | (0x10 << sm)], False))
+    for word in prog.init:
+        ops.append((R.addr("EXEC", sm), [word], False))
+    if prog.entry:
+        ops.append((R.addr("EXEC", sm), [enc_jmp(R.COND_ALWAYS, prog.entry)], False))
+    return ops
+
+
+def pad_masks(prog: Program, **overrides) -> tuple[int, int]:
+    """(open-drain mask, filter mask) requested by the program's `.pins od=... filter=...`."""
+    c = dict(prog.config)
+    c.update(overrides)
+    return pin_mask(c.get("od_pins")), pin_mask(c.get("filter_pins"))
+
+
+def pinvec_ops(name: str, value: int) -> list[tuple[int, list[int], bool]]:
+    """Write a 19-bit pin vector to a `<name>_LO` / `<name>_HI` register pair."""
+    return [(R.addr(name + "_LO"), [value & 0xFFFF, (value >> 16) & 7], True)]
+
+
+def spi_wave(data: bytes, half: int = 4, lead: int = 4, gap: int = 6) -> tuple[list[tuple[int, int, int]], list[int]]:
+    """Cycle-by-cycle (cs_n, sck, mosi) levels for one SPI mode-0 frame.
+
+    Returns the waveform and, for each bit, the cycle index at which the host samples MISO (the
+    last cycle before SCK rises). `half` is the SCK half period in clock cycles.
+    """
+    wave: list[tuple[int, int, int]] = []
+    samples: list[int] = []
+    wave += [(0, 0, 0)] * lead
+    for byte in data:
+        for bit in range(7, -1, -1):
+            m = (byte >> bit) & 1
+            wave += [(0, 0, m)] * half
+            samples.append(len(wave) - 1)
+            wave += [(0, 1, m)] * half
+    wave += [(0, 0, 0)] * lead
+    wave += [(1, 0, 0)] * gap
+    return wave, samples
+
+
+class Bench:
+    """The simulator plus a simple model of the pads around it, for unit tests and examples.
+
+    `ui_pins` holds the levels driven into PIN0..PIN4 and `uio_ext` the levels driven by the outside
+    world onto the bidirectional pads (1 = released / pulled up). A pad the chip drives takes the
+    chip's level. Callables in `hooks` run before every clock cycle and may change both.
+    """
+
+    def __init__(self, iss=None, trace: bool = False):
+        from .iss import Bitweaver
+        self.iss = iss or Bitweaver()
+        self.ui_pins = 0x1F
+        self.uio_ext = 0xFF
+        self.hooks: list = []
+        self.trace: list[int] | None = [] if trace else None
+        self.out = (0, 0, 0)
+        self.cycle = 0
+        for _ in range(3):
+            self.out = self.iss.step(0x80 | self.ui_pins, self.uio_ext, rst_n=0)
+        self.run(4)
+
+    def pads(self) -> int:
+        """Levels on all 19 pins as an outside observer sees them."""
+        uo, uio_out, uio_oe = self.out
+        uio = (uio_out & uio_oe) | (self.uio_ext & ~uio_oe & 0xFF)
+        return (self.ui_pins & 0x1F) | ((uo & 0x3F) << 5) | (uio << 11)
+
+    def pin(self, n: int) -> int:
+        return (self.pads() >> n) & 1
+
+    def step(self, cs_n: int = 1, sck: int = 0, mosi: int = 0) -> None:
+        for h in self.hooks:
+            h(self)
+        ui = (self.ui_pins & 0x1F) | (mosi << 5) | (sck << 6) | (cs_n << 7)
+        self.out = self.iss.step(ui, (self.pads() >> 11) & 0xFF)
+        self.cycle += 1
+        if self.trace is not None:
+            self.trace.append(self.pads())
+
+    def run(self, cycles: int) -> None:
+        for _ in range(cycles):
+            self.step()
+
+    @property
+    def miso(self) -> int:
+        return (self.out[0] >> 7) & 1
+
+    @property
+    def host_irq(self) -> int:
+        return (self.out[0] >> 6) & 1
+
+
+class Driver:
+    """High-level host operations on top of a transport's `write` and `read`."""
+
+    def __init__(self):
+        self.en = 0
+        self.od = 0
+        self.filt = 0
+        self.origin = 0  # next free instruction-memory address
+
+    # -- transport, implemented by subclasses
+    def write(self, addr: int, words, inc: bool = False) -> None:
+        raise NotImplementedError
+
+    def read(self, addr: int, count: int = 1, inc: bool = False) -> list[int]:
+        raise NotImplementedError
+
+    # -- operations
+    def load(self, prog: Program, sm: int, origin: int | None = None, **overrides) -> int:
+        """Load a program into engine `sm` (disabled). Returns the origin it was placed at."""
+        if origin is None:
+            origin = self.origin
+            self.origin += len(prog.code)
+        for addr, words, inc in load_ops(prog, sm, origin, self.en, **overrides):
+            self.write(addr, words, inc)
+        self.en &= ~(1 << sm)
+        od, filt = pad_masks(prog, **{k: v for k, v in overrides.items() if k in ("od_pins", "filter_pins")})
+        if od & ~self.od:
+            self.set_open_drain(self.od | od)
+        if filt & ~self.filt:
+            self.set_filter(self.filt | filt)
+        return origin
+
+    def enable(self, mask: int) -> None:
+        self.en |= mask & 0xF
+        self.write(R.addr("CTRL"), [self.en])
+
+    def disable(self, mask: int) -> None:
+        self.en &= ~mask
+        self.write(R.addr("CTRL"), [self.en])
+
+    def set_open_drain(self, mask: int) -> None:
+        self.od = mask
+        for op in pinvec_ops("PAD_OD", mask):
+            self.write(*op)
+
+    def set_filter(self, mask: int) -> None:
+        self.filt = mask
+        for op in pinvec_ops("PAD_FILT", mask):
+            self.write(*op)
+
+    def set_pins(self, levels: int, dirs: int) -> None:
+        for op in pinvec_ops("PIN_OUT", levels) + pinvec_ops("PIN_OE", dirs):
+            self.write(*op)
+
+    def push(self, sm: int, words) -> None:
+        self.write(R.addr("FIFO", sm), list(words))
+
+    def pop(self, sm: int, count: int = 1) -> list[int]:
+        return self.read(R.addr("FIFO", sm), count)
+
+    def exec(self, sm: int, word: int) -> None:
+        self.write(R.addr("EXEC", sm), [word])
+
+    def rx_level(self, sm: int) -> int:
+        return (self.read(R.addr("STAT", sm))[0] >> 12) & 15
+
+    def tx_level(self, sm: int) -> int:
+        return (self.read(R.addr("STAT", sm))[0] >> 8) & 15
+
+
+class FastDriver(Driver):
+    """Drives the simulator through its register strobes, skipping the SPI bit clock."""
+
+    def __init__(self, bench: Bench):
+        super().__init__()
+        self.b = bench
+
+    def write(self, addr, words, inc=False):
+        iss = self.b.iss
+        for w in words:
+            iss.wr_en, iss.wr_addr, iss.wr_data = 1, addr & 0xFF, w & 0xFFFF
+            self.b.step()
+            self.b.step()
+            addr += int(inc)
+
+    def read(self, addr, count=1, inc=False):
+        iss = self.b.iss
+        out = []
+        for _ in range(count):
+            out.append(iss.peek(addr))
+            k = iss._fifo_index(addr & 0xFF)
+            if k is not None:
+                iss.rd_armed = 1 if iss.sm[k].rx else 0
+                iss.rd_pop, iss.addr = 1, addr & 0xFF
+                self.b.step()
+                self.b.step()
+            addr += int(inc)
+        return out
+
+
+class SpiDriver(Driver):
+    """Drives the simulator through its SPI pins, one clock cycle at a time."""
+
+    def __init__(self, bench: Bench, half: int = 4):
+        super().__init__()
+        self.b = bench
+        self.half = half
+        self.first_bytes = (0, 0)  # the ID and status bytes seen in the last frame
+
+    def _frame(self, data: bytes) -> bytes:
+        wave, samples = spi_wave(data, self.half)
+        bits = []
+        want = set(samples)
+        for i, (cs_n, sck, mosi) in enumerate(wave):
+            if i in want:
+                bits.append(self.b.miso)
+            self.b.step(cs_n, sck, mosi)
+        out = bytearray()
+        for i in range(0, len(bits), 8):
+            v = 0
+            for bit in bits[i:i + 8]:
+                v = (v << 1) | bit
+            out.append(v)
+        self.first_bytes = (out[0], out[1])
+        return bytes(out)
+
+    def write(self, addr, words, inc=False):
+        self._frame(frame_bytes(addr, words, write=True, inc=inc))
+
+    def read(self, addr, count=1, inc=False):
+        raw = self._frame(frame_bytes(addr, count=count, write=False, inc=inc))
+        return [(raw[2 + 2 * i] << 8) | raw[3 + 2 * i] for i in range(count)]
