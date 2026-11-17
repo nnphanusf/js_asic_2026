@@ -51,6 +51,7 @@ timestamp, FIFO chaining) let firmware speak protocols the chip was never design
 source ~/tools/oss-cad-suite/environment                  # iverilog, verilator, yosys, sby, cocotb
 make -C sw test                                           # toolchain unit tests
 (cd sw && python3 -m bitweaver.asm programs/uart.bw)      # assemble and list a program
+make -C sw programs                                       # all programs to sw/build: .json, .hex, .lst
 cd test && make && python3 -m cocotb_tools.check_results results.xml   # RTL tests, in lock-step
 ```
 
