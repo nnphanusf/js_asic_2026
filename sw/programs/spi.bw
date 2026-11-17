@@ -1,0 +1,96 @@
+; SPI controller (all four modes) and SPI target (mode 0).
+;
+; Default pins follow the Tiny Tapeout SPI Pmod convention on the bidirectional header:
+;   CS = PIN11 (uio[0]), MOSI = PIN12 (uio[1]), MISO = PIN13 (uio[2]), SCK = PIN14 (uio[3]).
+; Bytes travel MSB first, one per FIFO word, right aligned.
+
+.define CPOL 0
+
+.program spi_ctrl_cpha0
+; Controller for CPHA = 0 (mode 0, or mode 2 with CPOL = 1).
+; Host protocol: push N-1, then N bytes. The program lowers CS, exchanges N bytes, raises CS, and
+; pushes every received byte to the RX FIFO. A bit takes 4 ticks: SCK = f_clk / (4 * clkdiv),
+; at most 7.5 MHz (clkdiv 2) so that MISO has time to pass the input synchronizer.
+.side_set 1
+.pins out=12 out_count=1 set=11 set_count=1 side=14 in=13 dirs=11,12,14 high=11
+.shift out=left in=left autopush=8
+.init nop side CPOL
+.wrap_target
+    pull           side CPOL       ; header: number of bytes - 1
+    mov x, osr     side CPOL
+    set pins, 0    side CPOL       ; CS low
+byte:
+    pull           side CPOL
+    mov osr, <>osr side CPOL       ; move the byte to the top of the OSR
+    set y, 7       side CPOL
+bit:
+    out pins, 1    side CPOL [1]   ; data out half a bit before the leading edge
+    in pins, 1     side 1-CPOL     ; leading edge: sample MISO
+    jmp y-- bit    side 1-CPOL
+    jmp x-- byte   side CPOL
+    set pins, 1    side CPOL [1]   ; CS high
+.wrap
+
+.program spi_ctrl_cpha1
+; Controller for CPHA = 1 (mode 1, or mode 3 with CPOL = 1). Same host protocol and speed as above.
+.side_set 1
+.pins out=12 out_count=1 set=11 set_count=1 side=14 in=13 dirs=11,12,14 high=11
+.shift out=left in=left autopush=8
+.init nop side CPOL
+.wrap_target
+    pull           side CPOL
+    mov x, osr     side CPOL
+    set pins, 0    side CPOL
+byte:
+    pull           side CPOL
+    mov osr, <>osr side CPOL
+    set y, 7       side CPOL
+bit:
+    out pins, 1    side 1-CPOL [1] ; leading edge: data out
+    in pins, 1     side CPOL       ; trailing edge: sample MISO
+    jmp y-- bit    side CPOL
+    jmp x-- byte   side CPOL
+    set pins, 1    side CPOL [1]
+.wrap
+
+.program spi_target
+; Mode 0 target.
+; * Every received byte goes to the RX FIFO. If the FIFO is full the byte is dropped and
+;   FDEBUG.RXSTALL is set, because a target must never stall the bus.
+; * Each reply byte comes from the TX FIFO, or is 0xFF if the FIFO is empty. The next reply is
+;   fetched during the last bit of the previous byte; if that found the FIFO empty, the program
+;   tries again when CS next falls, so replies queued between frames are not lost.
+; * CS release is noticed between bytes and while waiting for the first clock edge.
+; Run at clkdiv 1: SCK up to about 3 MHz.
+.pins in=12 out=13 out_count=1 jmp=11 dirs=13
+.shift in=left out=left
+.timeout 0                    ; a timed WAIT checks once and falls through
+    mov x, !null              ; X = 0xFFFF marks "no reply": host bytes are at most 0xFF
+    mov osr, x
+wait_cs:
+    wait 0 pin 31             ; CS low (IN_BASE + 31 wraps around to PIN11)
+    mov y, osr
+    jmp x!=y frame            ; a real reply is already waiting
+    pull noblock              ; otherwise try the FIFO again
+    mov osr, <>osr            ; reply byte to the top of the OSR (0xFFFF stays 0xFFFF)
+frame:
+.wrap_target
+    mov pins, ::osr           ; show the reply's MSB without shifting it out
+first:
+    jmp pin wait_cs           ; CS released before the first clock edge
+    wait 1 pin 2 timeout      ; SCK high skips the next instruction
+    jmp first
+    set y, 6
+bit:
+    in pins, 1                ; rising edge: sample MOSI
+    out null, 1               ; drop the bit just sent
+    wait 0 pin 2              ; falling edge: show the next bit
+    mov pins, ::osr
+    wait 1 pin 2
+    jmp y-- bit
+    in pins, 1                ; last bit
+    push noblock
+    pull noblock              ; fetch the next reply now
+    mov osr, <>osr
+    wait 0 pin 2
+.wrap

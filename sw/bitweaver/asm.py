@@ -198,6 +198,9 @@ class _Asm:
                     if k in kv:
                         p.config[{"in": "in_base", "out": "out_base", "set": "set_base", "side": "side_base",
                                   "jmp": "jmp_pin"}.get(k, k)] = _eval(kv.pop(k), names)
+                for key in ("dirs", "high"):
+                    if key in kv:
+                        p.config[key + "_pins"] = [_eval(x, names) for x in kv.pop(key).split(",")]
                 if "od" in kv:
                     p.config["od_pins"] = [_eval(x, names) for x in kv.pop("od").split(",")]
                 if "filter" in kv:

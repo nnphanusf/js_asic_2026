@@ -10,13 +10,13 @@ cocotb testbench and the MicroPython driver. A transport only has to implement
 from __future__ import annotations
 
 from . import regmap as R
-from .asm import Program, enc_jmp
+from .asm import Program, enc_jmp, enc_set
 
 _CFG_KEYS = {
     "clkdiv", "clkdiv_int", "clkdiv_frac", "in_base", "out_base", "set_base", "side_base", "jmp_pin",
     "out_count", "set_count", "in_shiftdir", "out_shiftdir", "autopush", "autopull", "push_thresh",
     "pull_thresh", "join_tx", "join_rx", "chain_src", "tmo", "bau_poly", "stuff_n", "stuff_any",
-    "od_pins", "filter_pins",
+    "od_pins", "filter_pins", "dirs_pins", "high_pins",
 }
 
 
@@ -88,12 +88,31 @@ def load_ops(prog: Program, sm: int, origin: int, en_shadow: int = 0, write_code
     ops: list[tuple[int, list[int], bool]] = [(R.addr("CTRL"), [en], False)]
     if write_code:
         ops.append((R.IMEM_BASE + origin, list(prog.code), True))
+    ops += pin_setup_ops(prog, sm, **{k: v for k, v in overrides.items() if k in ("dirs_pins", "high_pins")})
     ops.append((R.addr("CLKDIV_INT", sm), sm_config(prog, origin, **overrides), True))
     ops.append((R.addr("CTRL"), [en | (0x10 << sm)], False))
     for word in prog.init:
         ops.append((R.addr("EXEC", sm), [word], False))
     if prog.entry:
         ops.append((R.addr("EXEC", sm), [enc_jmp(R.COND_ALWAYS, prog.entry)], False))
+    return ops
+
+
+def pin_setup_ops(prog: Program, sm: int, **overrides) -> list[tuple[int, list[int], bool]]:
+    """Set the initial level and direction of the pins named in `.pins dirs=... high=...`.
+
+    Each pin is set through the engine itself (SET_BASE pointed at the pin, then EXEC of `set pins` and
+    `set pindirs`), so pins owned by other engines or by the host are never touched.
+    """
+    c = dict(prog.config)
+    c.update(overrides)
+    dirs = c.get("dirs_pins") or []
+    high = set(c.get("high_pins") or [])
+    ops: list[tuple[int, list[int], bool]] = []
+    for pin in dirs:
+        ops.append((R.addr("PINCTRL0", sm), [R.pack("PINCTRL0", set_base=pin), R.pack("PINCTRL1", set_count=1)], True))
+        ops.append((R.addr("EXEC", sm), [enc_set(R.SET_PINS, 1 if pin in high else 0)], False))
+        ops.append((R.addr("EXEC", sm), [enc_set(R.SET_PINDIRS, 1)], False))
     return ops
 
 
