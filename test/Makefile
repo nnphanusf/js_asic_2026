@@ -51,7 +51,7 @@ TOPLEVEL = tb
 export PYTHONPATH := $(PWD)/lib:$(PWD)/../sw:$(PYTHONPATH)
 
 # List test modules to run, separated by commas and without the .py suffix:
-COCOTB_TEST_MODULES ?= test_smoke,test_isa,test_proto_uart,test_proto_spi
+COCOTB_TEST_MODULES ?= test_smoke,test_isa,test_proto_uart,test_proto_spi,test_proto_i2c
 
 # include cocotb's make rules to take care of the simulator setup
 include $(shell cocotb-config --makefiles)/Makefile.sim

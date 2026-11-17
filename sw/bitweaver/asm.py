@@ -305,7 +305,7 @@ class _Asm:
                 raise AsmError(f"unknown jmp condition '{cond}'")
             t = _eval(target, names)
             if not 0 <= t < 32:
-                raise AsmError(f"jump target {t} is outside the 32-instruction window")
+                raise AsmError(f"jump target {t} is outside the program's first 32 instructions")
             return enc_jmp(_COND[cond], t, ds)
         if op == "wait":
             timed = "timeout" in low
@@ -382,8 +382,9 @@ class _Asm:
 
     def finish(self) -> Program:
         p = self.p
-        if len(self.pending) > 32:
-            raise AsmError(f"program '{p.name}' has {len(self.pending)} instructions; the limit is 32")
+        if len(self.pending) > R.IMEM_DEPTH:
+            raise AsmError(f"program '{p.name}' has {len(self.pending)} instructions; the limit is "
+                           f"{R.IMEM_DEPTH}")
         if not self.wrap_set:
             p.wrap = len(self.pending) - 1
         names = dict(p.defines)

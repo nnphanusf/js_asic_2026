@@ -109,10 +109,14 @@ def test_errors(bad):
         assemble_one(bad)
 
 
-def test_too_long():
+def test_program_length_and_jump_reach():
+    """Programs may be up to 64 instructions long, but jump targets must be in the first 32."""
     with pytest.raises(AsmError):
-        assemble_one("\n".join(["nop"] * 33))
-    assert len(assemble_one("\n".join(["nop"] * 32)).code) == 32
+        assemble_one("\n".join(["nop"] * 65))
+    assert len(assemble_one("\n".join(["nop"] * 64)).code) == 64
+    assert assemble_one("\n".join(["nop"] * 40) + "\n jmp 31").code[-1] == instr("jmp 31")
+    with pytest.raises(AsmError):
+        assemble_one("\n".join(["nop"] * 40) + "\nfar: nop\n jmp far")
 
 
 def test_disasm_roundtrip():

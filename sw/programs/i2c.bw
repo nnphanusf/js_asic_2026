@@ -1,0 +1,155 @@
+; I2C controller, and an I2C target built from two engines.
+;
+; Default pins follow the Tiny Tapeout I2C Pmod convention: SCL = PIN13 (uio[2]), SDA = PIN14 (uio[3]).
+; Both are open drain: level 0 pulls the line low, level 1 releases it. External pull-ups are needed.
+
+.define ADDR 0x42             ; the target's 7-bit address
+
+.program i2c_ctrl
+; I2C controller with repeated START and clock stretching.
+; A bit takes 10 ticks: SCL low 5, high 5, and SCL stays high for at least 4 ticks after any clock
+; stretching ends. clkdiv 60 gives standard mode at 100 kHz; clkdiv 16 gives fast mode at 375 kHz
+; (tLOW needs 5 ticks >= 1.3 us). Every SCL release waits until SCL is really high, so targets can
+; stretch the clock; inside a byte that wait is bounded by TMO ticks, after which the program raises
+; IRQ flag 0 (relative to the engine) and waits for the host to clear it.
+;
+; Host protocol: one command word per byte, sent MSB first from the OSR:
+;   bit 15     START (or repeated START) before the byte
+;   bits 14:7  byte to put on SDA (0xFF to read)
+;   bit 6      ACK bit to put on SDA (1 when writing, so the target can ACK; 0 = ACK / 1 = NACK when
+;              reading)
+;   bit 5      STOP after the byte
+; For every byte the RX FIFO receives the nine bits seen on SDA: (byte << 1) | ack.
+.side_set 1 opt
+.pins out=14 out_count=1 set=14 set_count=1 in=14 side=13 dirs=13,14 high=13,14 od=13,14
+.shift out=left in=left autopush=9
+.timeout 10000
+cmd:
+    pull
+    out x, 1                  ; START?
+    jmp !x byte
+    set pins, 1  [4]          ; release SDA (for a repeated START, SCL is low here)
+    nop side 1   [4]          ; release SCL
+    wait 1 pin 31             ; SCL really high (SCL = IN_BASE + 31 = PIN13)
+    set pins, 0  [4]          ; SDA falls while SCL is high: START
+    nop side 0
+byte:
+    set y, 8                  ; eight data bits and the ACK bit
+bit:
+    out pins, 1  [3]          ; SDA changes while SCL is low
+    nop side 1                ; release SCL
+    wait 1 pin 31 timeout     ; clock stretching, bounded by TMO; success skips the next instruction
+    jmp stuck
+    in pins, 1   [2]          ; sample SDA
+    jmp y-- bit  side 0       ; SCL low
+    out x, 1                  ; STOP?
+    jmp !x cmd
+    set pins, 0  [4]          ; SDA low
+    nop side 1   [4]          ; release SCL
+    wait 1 pin 31
+    set pins, 1  [4]          ; SDA rises while SCL is high: STOP
+    jmp cmd
+stuck:
+    irq wait 0 rel            ; SCL held low too long: tell the host and wait for it
+    mov isr, null
+    jmp cmd
+
+.program i2c_cond
+; Bus watcher for the I2C target: raises IRQ flag 5 on every START or STOP and IRQ flag 4 on START.
+; It runs at clkdiv 1 and polls both lines every few clock cycles.
+.pins in=14 jmp=14            ; SDA; SCL is IN_BASE + 31
+.timeout 0                    ; a timed WAIT checks once and falls through
+wait_high:
+    wait 1 pin 31             ; SCL high
+    jmp pin high_loop         ; with SDA high
+low_loop:                     ; SCL high, SDA low
+    wait 0 pin 31 timeout     ; SCL fell: skip the next instruction
+    jmp low_check
+    jmp wait_high
+low_check:
+    jmp pin maybe_stop        ; SDA rose
+    jmp low_loop
+maybe_stop:
+    wait 1 pin 31 timeout     ; and SCL is still high: STOP
+    jmp wait_high
+    irq 5
+high_loop:                    ; SCL high, SDA high
+    wait 0 pin 31 timeout
+    jmp high_check
+    jmp wait_high
+high_check:
+    jmp pin high_loop
+    wait 1 pin 31 timeout     ; SDA fell while SCL is still high: START
+    jmp wait_high
+    irq 5
+    irq 4
+    jmp low_loop
+
+.program i2c_target
+; I2C target at address ADDR. Needs i2c_cond running on another engine.
+; * Bytes written by the controller go to the RX FIFO (data in bits 7:0). A byte that finds the RX
+;   FIFO full is dropped (FDEBUG.RXSTALL) but still ACKed.
+; * Bytes read by the controller come from the TX FIFO. While the TX FIFO is empty the target holds
+;   SCL low (clock stretching) until the host supplies a byte.
+; * Any START or STOP restarts the receiver, so repeated STARTs work.
+; Run at clkdiv 1.
+.side_set 1 opt
+.pins in=14 out=14 out_count=1 set=14 set_count=1 side=13 jmp=29 dirs=13,14 high=13,14 od=13,14
+.shift in=left out=left
+.timeout 0
+.init mov isr, null           ; X = ADDR, built from two 5-bit SETs
+.init set y, ADDR >> 2
+.init in y, 5
+.init set y, ADDR & 3
+.init in y, 2
+.init mov x, isr
+.init mov isr, null
+idle:
+    set pins, 1               ; release SDA
+    wait 1 irq 4              ; START (clears flag 4)
+    irq clear 5               ; forget the condition flag for this START
+    mov osr, null             ; OSR not empty: the next byte is the address
+    wait 0 pin 31             ; SCL is still high after the START: wait for it to fall
+rbyte:
+    set y, 7
+rbit:
+    wait 1 pin 31             ; SCL high
+    in pins, 1                ; sample SDA
+rlow:
+    jmp pin idle              ; START or STOP while receiving (flag 5 = virtual pin 29): start over
+    wait 0 pin 31 timeout     ; SCL low: skip the next instruction
+    jmp rlow
+    jmp y-- rbit
+    jmp !osre addr            ; first byte after START
+    push noblock              ; a written data byte
+ack:
+    set pins, 0               ; ACK
+    wait 1 pin 31
+    wait 0 pin 31
+    set pins, 1
+    jmp !osre tbyte           ; read transaction: transmit
+    jmp rbyte
+addr:
+    mov osr, isr
+    out null, 8
+    out y, 7
+    jmp x!=y idle             ; another target's address: stay quiet
+    out y, 1                  ; R/W bit; the OSR is now empty
+    jmp !y ack                ; write: ACK, then receive
+    mov osr, null             ; read: remember it in the OSR
+    jmp ack
+tbyte:
+    pull block     side 0     ; hold SCL low until the host supplies a byte
+    mov osr, <>osr side 0
+    set y, 7       side 0
+tbit:
+    out pins, 1    side 1     ; data bit while SCL is low; stop stretching
+    wait 1 pin 31
+    wait 0 pin 31
+    jmp y-- tbit
+    set pins, 1               ; release SDA for the controller's ACK
+    wait 1 pin 31
+    wait 0 pin 0 timeout      ; ACK: skip the next instruction
+    jmp idle                  ; NACK: the controller has finished reading
+    wait 0 pin 31
+    jmp tbyte
