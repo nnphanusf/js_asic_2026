@@ -33,10 +33,11 @@ its own are logged with their reasons in `PROGRESS.md`.
 
 The agent's output was treated as unverified until a tool agreed with it:
 
-- **Two independent descriptions of the design.** The Python simulator and the RTL were written separately, each
-  from the specification. The lock-step testbench runs both on the same inputs and requires identical outputs on
-  every pin on every clock cycle. Disagreements are investigated; each one is either a model bug or an RTL bug, and
-  the fix is recorded in `docs/verification.md`.
+- **Two descriptions of the design, compared on every cycle.** The Python simulator was written first, as the
+  executable specification; the RTL was written afterwards by the same agent, deliberately following the
+  simulator's structure. The lock-step testbench runs both on the same inputs and requires identical outputs on
+  every pin on every clock cycle. This proves the RTL implements the model exactly; it cannot show that the model
+  itself is right, which is why the next check exists.
 - **Independent protocol models.** Protocol programs are judged by third-party models (`cocotbext-uart`,
   `cocotbext-spi`) or by models written separately from the firmware, never only by the simulator.
 - **Formal proofs** (SymbiYosys) for the FIFO, the host port and open-drain safety.

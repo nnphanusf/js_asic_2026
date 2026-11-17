@@ -17,9 +17,11 @@ coverage), `formal`, `gds` (hardening, precheck, gate-level tests on the routed 
 ## 1. The ISS as executable specification
 
 `sw/bitweaver/iss.py` is a cycle-accurate model of the whole chip, including the host SPI port, the input
-synchronizers and glitch filters, the pad logic and every engine. It was written from the specification
-([isa.md](isa.md)), separately from the RTL, in the same structure: one `step()` computes every next-state value
-from the current state and the inputs sampled at the clock edge.
+synchronizers and glitch filters, the pad logic and every engine. It was written first, together with
+[isa.md](isa.md), and the RTL was then written to match it in the same structure: one `step()` computes every
+next-state value from the current state and the inputs sampled at the clock edge. Because the RTL follows the model,
+lock-step (layer 2) shows that the RTL implements the model exactly, and the independent protocol models (layer 3)
+are what show that the model itself does the right thing.
 
 The pytest suite (`make -C sw test`, 74 tests) checks the assembler encodings and error messages, a
 disassemble/re-assemble round trip over the whole 16-bit encoding space, the generated files
