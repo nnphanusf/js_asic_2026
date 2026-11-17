@@ -1,0 +1,52 @@
+; Dallas/Maxim 1-Wire bus master, standard speed. This is the program written step by step in
+; docs/programming_guide.md.
+;
+; One open-drain pin (default PIN17 = uio[6]) with an external pull-up. clkdiv 60 makes a tick 1 us,
+; so every delay below is in microseconds.
+; Host protocol, one word per operation:
+;   0x0000           reset pulse; pushes 0 if a device answered with a presence pulse, 1 if not
+;   0x0100 | byte    exchange one byte, LSB first; pushes the byte read back in bits 15:8.
+;                    To read a byte, send 0xFF: a read slot is a write-1 slot.
+
+.program onewire
+.pins out=17 out_count=1 set=17 set_count=1 in=17 dirs=17 high=17 od=17
+.shift out=right in=right
+.clkdiv 60
+.timeout 240                  ; presence pulse must start within 15 + 240 us of the release
+.wrap_target
+cmd:
+    pull
+    out x, 8                  ; the byte
+    out y, 1                  ; 1 = byte, 0 = reset
+    jmp !y reset
+    mov osr, x                ; the byte again, LSB first
+    set y, 7
+slot:                         ; one 70 us time slot per bit
+    set pins, 0 [5]           ; 0..5: drive low for 6 us
+    out pins, 1 [8]           ; 6..14: release for a 1 (or a read), keep low for a 0
+    in pins, 1 [31]           ; 15: sample; the device holds the line low here to send a 0
+    nop [12]                  ; 47..59
+    set pins, 1 [8]           ; 60..68: release (ends a 0 slot), recovery time
+    jmp y-- slot              ; 69
+    push                      ; the byte read, in bits 15:8
+.wrap
+reset:
+    set pins, 0               ; reset pulse: 480 us low
+    set x, 14
+rlow:
+    jmp x-- rlow [31]         ; 15 x 32 us
+    set pins, 1 [14]          ; release, wait 15 us
+    wait 0 pin 0 timeout      ; presence pulse? success skips the next instruction
+    jmp absent
+    set x, 0                  ; present
+    wait 1 pin 0              ; end of the presence pulse
+    jmp rest
+absent:
+    set x, 1
+rest:
+    mov isr, x
+    push
+    set x, 12
+rwait:
+    jmp x-- rwait [31]        ; let the reset window finish (the device may be slow)
+    jmp cmd
