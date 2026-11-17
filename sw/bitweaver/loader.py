@@ -332,3 +332,46 @@ class SpiDriver(Driver):
     def read(self, addr, count=1, inc=False):
         raw = self._frame(frame_bytes(addr, count=count, write=False, inc=inc))
         return [(raw[2 + 2 * i] << 8) | raw[3 + 2 * i] for i in range(count)]
+
+
+def build_image(source: str, program: str, sm: int, origin: int = 0, defines: dict | None = None,
+                **overrides) -> dict:
+    """A load image: every SPI register write needed to load `program` into engine `sm`.
+
+    The MicroPython driver (sw/host/micropython/bitweaver.py) replays images, so nothing has to be
+    assembled on the board.
+    """
+    from .asm import assemble_file
+    prog = assemble_file(source, defines)[program]
+    frames = [[a, w, inc] for a, w, inc in load_ops(prog, sm, origin, **overrides)]
+    od, filt = pad_masks(prog, **{k: v for k, v in overrides.items() if k in ("od_pins", "filter_pins")})
+    for name, mask in (("PAD_OD", od), ("PAD_FILT", filt)):
+        if mask:
+            frames += [[a, w, inc] for a, w, inc in pinvec_ops(name, mask)]
+    return {"program": program, "sm": sm, "origin": origin, "length": len(prog.code), "frames": frames,
+            "labels": prog.labels, "note": "OR the PAD_OD / PAD_FILT masks with other engines' masks if needed"}
+
+
+def main() -> None:
+    import argparse
+    import json
+    ap = argparse.ArgumentParser(description="Build a Bitweaver load image (JSON) for the board driver")
+    ap.add_argument("source", help=".bw file")
+    ap.add_argument("program", help="program name inside the file")
+    ap.add_argument("--sm", type=int, default=0)
+    ap.add_argument("--origin", type=int, default=0)
+    ap.add_argument("--clkdiv", type=float)
+    ap.add_argument("-D", "--define", action="append", default=[], help="NAME=VALUE for the assembler")
+    ap.add_argument("-o", "--output", required=True)
+    args = ap.parse_args()
+    defines = {k: int(v, 0) for k, v in (d.split("=", 1) for d in args.define)}
+    overrides = {"clkdiv": args.clkdiv} if args.clkdiv else {}
+    image = build_image(args.source, args.program, args.sm, args.origin, defines, **overrides)
+    with open(args.output, "w") as fh:
+        json.dump(image, fh)
+    print(f"{args.program}: {image['length']} instructions at {args.origin} on SM{args.sm}, "
+          f"{len(image['frames'])} frames -> {args.output}")
+
+
+if __name__ == "__main__":
+    main()
