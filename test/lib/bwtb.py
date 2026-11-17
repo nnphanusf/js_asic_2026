@@ -226,11 +226,10 @@ class TB:
             if waited > timeout_cycles:
                 raise TimeoutError(f"SM{sm} TX FIFO did not drain")
 
-    async def push_all(self, sm: int, words, timeout_cycles: int = 400000, poll: int = 200):
-        """Push words without ever overflowing the TX FIFO (waits for space)."""
+    async def push_all(self, sm: int, words, timeout_cycles: int = 400000, poll: int = 200, depth: int = 4):
+        """Push words without ever overflowing the TX FIFO (waits for space). depth = 8 for a joined FIFO."""
         words = list(words)
         waited = 0
-        depth = 4
         while words:
             space = depth - await self.tx_level(sm)
             if space > 0:

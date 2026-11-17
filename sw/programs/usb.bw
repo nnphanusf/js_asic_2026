@@ -1,0 +1,109 @@
+; Low-speed USB (1.5 Mbit/s) packet transmitter and receiver.
+;
+; A bit is 10 ticks: clkdiv 4 gives 40 clock cycles per bit at 60 MHz. The bit-level assist unit does
+; NRZI coding and bit stuffing (a 0 after six 1s) in both directions, and computes the CRC16 of DATA
+; packets on transmit. Line states for low speed: J = D- high, D+ low; K = D- low, D+ high; SE0 = both
+; low. Pins: D- = PIN11 (uio[0]), D+ = PIN12 (uio[1]); the bus needs the usual 1.5 kOhm pull-up on D-.
+
+.define DM 11
+
+.program usb_tx
+; A segment interpreter. The host queues segments (bitweaver.proto.usb_tx_words); each is two words,
+; a bit count minus one and an instruction, followed by the segment's bits LSB first. The engine
+; executes the instruction just before the segment's first bit, so the host decides per packet:
+;   SYNC + PID       nop
+;   payload          set bau, BAU_NRZI | BAU_STUFF | BAU_CRC   (the CRC16 covers only the payload)
+;   CRC16            mov osr, !crc                              (no data words: the bits come from the CRC)
+;   end of packet    jmp eop
+; Inside every 10-tick bit the pins change at tick 3, also across segments and stuff bits.
+.pins out=DM out_count=2 set=DM set_count=2 jmp=STUFF
+.clkdiv 4
+.bau poly=0xA001 stuff=6 ones
+.shift out=right
+.fifo join_tx
+.wrap_target
+start:
+    pull                      ; the first segment header: wait here, bus released, until a packet comes
+    set pins, 1               ; J (D- high)
+    set pindirs, 3            ; drive D- and D+
+    mov crc, !null            ; CRC16 starts at 0xFFFF
+    set bau, BAU_RESET | BAU_NRZI | BAU_STUFF
+    jmp hdr
+bits:
+    jmp pin stuff             ; 0: virtual pin 21, a stuff bit is due
+    pull ifempty              ; 1
+    jmp !x last               ; 2
+    out pins, bau [5]         ; 3..8: NRZI line state on D-, its complement on D+
+    jmp x-- bits              ; 9
+stuff:
+    nop [1]                   ; 1..2
+    out pins, bau [5]         ; 3..8
+    jmp bits                  ; 9
+last:
+    out pins, bau             ; 3: last bit of the segment
+next:
+    pull                      ; 4: segment header, bit count - 1
+hdr:
+    out x, 16                 ; 5
+    pull                      ; 6: the segment's instruction
+    out exec, 16              ; 7: it runs at 8
+    jmp bits                  ; 9
+eop:                          ; reached at 9 through "jmp eop"
+    jmp pin estuff [3]        ; 9..12: a pending stuff bit goes out before the EOP
+eop2:
+    set pins, 0 [19]          ; SE0 for two bit times
+    set pins, 1 [9]           ; J for one bit time
+    set pindirs, 0            ; release the bus
+.wrap
+estuff:
+    out pins, bau [8]         ; 13..21
+    jmp eop2                  ; 22
+
+.program usb_rx
+; Receives packets: destuffed, NRZI-decoded bits are pushed LSB first in 16-bit words. At the end of
+; the packet (IRQ flag 6 from usb_se0) the partial last word and the bit count are pushed.
+; bitweaver.proto.usb_rx_decode checks SYNC, PID and CRC.
+.pins in=DM jmp=30            ; JMP PIN: IRQ flag 6 (virtual pin 30)
+.clkdiv 4
+.bau stuff=6 ones
+.shift in=right autopush=16
+.fifo join_rx
+.timeout 0
+idle:
+    irq clear 6
+    wait 1 pin 0              ; J: the bus is idle (D- is also low during the previous packet's SE0)
+    wait 0 pin 0              ; the first K of SYNC: hard synchronization
+    set bau, BAU_RESET | BAU_NRZI | BAU_STUFF
+    mov x, !null [1]          ; X counts bits down from 0xFFFF; sample in the middle of each bit
+.wrap_target
+bit:
+    wait 1 pin STUFF-DM timeout  ; a stuff bit is due: skip the counting instruction
+    jmp x-- count
+    nop
+count:
+    in pins, bau [6]          ; NRZI decode and destuff D-
+    jmp pin done              ; SE0 seen
+.wrap
+done:
+    push                      ; partial last word (left aligned)
+    mov isr, !x
+    push                      ; bit count
+    jmp idle
+
+.program usb_se0
+; Raises IRQ flag 6 when both lines are low (SE0, the end of packet). Run at clkdiv 1.
+; Both lines are sampled in the same cycle (IN PINS, 2): testing them one after the other would see a
+; K-to-J transition between the two tests as a false SE0.
+.pins in=DM
+.shift in=right
+.wrap_target
+loop:
+    mov isr, null
+    in pins, 2                ; D- and D+ together, into ISR bits 15:14
+    mov x, isr
+    jmp !x se0
+    jmp loop
+se0:
+    irq 6
+    wait 1 pin 0              ; wait for J after the EOP
+.wrap

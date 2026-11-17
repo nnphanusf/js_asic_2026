@@ -279,3 +279,94 @@ def can_rx_decode(words) -> tuple[int, bytes, bool]:
     end = 19 + 8 * dlc
     crc = field(end, 15)
     return ident, data, crc == can_crc15(bits[:end])
+
+
+# ---------------------------------------------------------------- low-speed USB (usb.bw)
+USB_PID = {"OUT": 0x1, "IN": 0x9, "SOF": 0x5, "SETUP": 0xD, "DATA0": 0x3, "DATA1": 0xB, "ACK": 0x2,
+           "NAK": 0xA, "STALL": 0xE}
+
+
+def usb_pid_byte(pid: int) -> int:
+    return (pid & 0xF) | ((~pid & 0xF) << 4)
+
+
+def usb_crc16(data) -> int:
+    """CRC16 of a DATA payload as transmitted: send the result LSB first (little-endian bytes)."""
+    crc = 0xFFFF
+    for byte in bytes(data):
+        for i in range(8):
+            fb = (crc ^ (byte >> i)) & 1
+            crc = (crc >> 1) ^ (0xA001 if fb else 0)
+    return crc ^ 0xFFFF
+
+
+def usb_crc5(value11: int) -> int:
+    """CRC5 of a token's 11-bit address/endpoint field, to be sent LSB first."""
+    crc = 0x1F
+    for i in range(11):
+        fb = (crc ^ (value11 >> i)) & 1
+        crc = (crc >> 1) ^ (0x14 if fb else 0)
+    return crc ^ 0x1F
+
+
+def _bits_lsb(value: int, n: int) -> list[int]:
+    return [(value >> i) & 1 for i in range(n)]
+
+
+def _pack_lsb(bits) -> list[int]:
+    bits = list(bits) + [0] * (-len(bits) % 16)
+    return [sum(b << j for j, b in enumerate(bits[i:i + 16])) for i in range(0, len(bits), 16)]
+
+
+def usb_tx_words(prog, pid: str, data=None, addr: int | None = None, endp: int = 0) -> list[int]:
+    """TX FIFO words for usb_tx: a handshake (pid only), a token (addr/endp) or a DATA packet."""
+    from . import regmap as R
+    from .asm import NOP, enc_jmp, enc_mov, enc_set
+
+    words: list[int] = []
+
+    def seg(bits, instr, has_data=True):
+        n = len(bits) if has_data else 16
+        words.extend([n - 1, instr])
+        if has_data:
+            words.extend(_pack_lsb(bits))
+
+    seg(_bits_lsb(0x80, 8) + _bits_lsb(usb_pid_byte(USB_PID[pid]), 8), NOP)
+    if addr is not None:
+        field = (addr & 0x7F) | ((endp & 0xF) << 7)
+        seg(_bits_lsb(field, 11) + _bits_lsb(usb_crc5(field), 5), NOP)
+    if data is not None:
+        data = bytes(data)
+        if data:
+            payload = [b for byte in data for b in _bits_lsb(byte, 8)]
+            seg(payload, enc_set(R.SET_BAU, R.BAU_NRZI | R.BAU_STUFF | R.BAU_CRC))
+        seg([], enc_mov(R.MOV_OSR, R.SRC_CRC, R.MOVOP_INVERT), has_data=False)
+    words.extend([0, enc_jmp(R.COND_ALWAYS, prog.labels["eop"])])
+    return words
+
+
+def usb_rx_decode(words) -> tuple[str | None, bytes, bool]:
+    """(PID name, bytes after the PID, packet valid) from the words usb_rx pushed for one packet."""
+    count = words[-1]
+    full, rest = divmod(count, 16)
+    bits = []
+    for w in words[:full]:
+        bits += _bits_lsb(w, 16)
+    if rest:
+        bits += _bits_lsb(words[full] >> (16 - rest), rest)
+    if count % 8 or count < 16:
+        return None, b"", False
+    raw = bytes(sum(bits[8 * i + j] << j for j in range(8)) for i in range(count // 8))
+    sync, pid_b, body = raw[0], raw[1], raw[2:]
+    names = {v: k for k, v in USB_PID.items()}
+    pid = pid_b & 0xF
+    ok = sync == 0x80 and (pid_b >> 4) == (~pid & 0xF) and pid in names
+    name = names.get(pid)
+    if name in ("DATA0", "DATA1"):
+        ok = ok and len(body) >= 2 and usb_crc16(body[:-2]) == body[-2] | (body[-1] << 8)
+        body = body[:-2]
+    elif name in ("OUT", "IN", "SOF", "SETUP"):
+        ok = ok and len(body) == 2
+        field = body[0] | (body[1] << 8)
+        ok = ok and usb_crc5(field & 0x7FF) == field >> 11
+    return name, body, ok
