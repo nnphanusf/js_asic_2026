@@ -472,6 +472,7 @@ class Bitweaver:
 
         # ---- shared registers: host write first, then engine effects on top
         nxt_out, nxt_oe = self.pin_out, self.pin_oe
+        prescale = self.ts_prescale  # a prescaler write takes effect from the next cycle
         w1c_irq = force_irq = w1c_dbg = 0
         time_wr = False
         if wr_en and wa < R.SM_BASE:
@@ -522,7 +523,7 @@ class Bitweaver:
             self.time = wd
             self.ts_pre = 0
         elif ena:
-            if self.ts_pre == self.ts_prescale:
+            if self.ts_pre == prescale:
                 self.ts_pre = 0
                 self.time = (self.time + 1) & MASK16
             else:
