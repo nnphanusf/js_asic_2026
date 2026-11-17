@@ -58,15 +58,26 @@ def i2c_result(word: int) -> tuple[int, bool]:
     return (word >> 1) & 0xFF, (word & 1) == 0
 
 
-def i2c_clkdiv(f_scl: float, f_clk: float = 60e6) -> int:
-    """Clock divider for i2c_ctrl (10 ticks per bit, SCL low for 5) at or below `f_scl`.
+def i2c_timing(f_scl: float, f_clk: float = 60e6) -> tuple[int, dict]:
+    """(clkdiv, assembler defines) for i2c_ctrl at or below `f_scl`, within the I2C timing limits.
 
-    Rounds up so the bus never runs faster than asked, and keeps tLOW (5 ticks) at or above the
-    I2C minimum: 4.7 us up to 100 kHz, 1.3 us above. 100 kHz -> 60, 400 kHz -> 16 (375 kHz).
+    Standard mode (<= 100 kHz) splits a bit 5/5 ticks so SCL stays high >= 4.0 us even after a
+    target stretched the clock; fast mode (<= 400 kHz) splits it 6/4 so SCL is low >= 1.3 us.
+    100 kHz -> (60, T_LOW 5, T_HIGH 5); 400 kHz -> (15, T_LOW 6, T_HIGH 4).
     """
     import math
-    t_low = 4.7e-6 if f_scl <= 100e3 else 1.3e-6
-    return max(math.ceil(f_clk / (10 * f_scl) - 1e-9), math.ceil(t_low * f_clk / 5 - 1e-9))
+    if f_scl <= 100e3:
+        t_low, t_high, min_low, min_high = 5, 5, 4.7e-6, 4.0e-6
+    else:
+        t_low, t_high, min_low, min_high = 6, 4, 1.3e-6, 0.6e-6
+    div = max(math.ceil(f_clk / ((t_low + t_high) * f_scl) - 1e-9),
+              math.ceil(min_low * f_clk / t_low - 1e-9), math.ceil(min_high * f_clk / (t_high - 1) - 1e-9))
+    return div, {"T_LOW": t_low, "T_HIGH": t_high}
+
+
+def i2c_clkdiv(f_scl: float, f_clk: float = 60e6) -> int:
+    """Clock divider for i2c_ctrl (see i2c_timing; also assemble with its defines)."""
+    return i2c_timing(f_scl, f_clk)[0]
 
 
 # ---------------------------------------------------------------- WS2812 (ws2812.bw)

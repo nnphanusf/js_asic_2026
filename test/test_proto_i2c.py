@@ -11,7 +11,7 @@ from cocotb.triggers import Timer
 
 from bitweaver import regmap as R
 from bitweaver.asm import load_program
-from bitweaver.proto import i2c_clkdiv, i2c_read_cmds, i2c_result, i2c_write_cmds
+from bitweaver.proto import i2c_read_cmds, i2c_result, i2c_timing, i2c_write_cmds
 from bwtb import TB
 from i2c_bfm import FAST, STANDARD, I2cController, I2cMonitor, I2cTarget, Line
 
@@ -39,15 +39,16 @@ async def test_i2c_controller(dut):
     tb = TB(dut)
     await tb.start()
     scl, sda = lines(dut)
-    await tb.load(load_program("i2c_ctrl"), 0)
     for timing in (STANDARD, FAST):
+        div, defines = i2c_timing(timing.f_scl)
+        await tb.load(load_program("i2c_ctrl", **defines), 0, origin=0, clkdiv=div)
         mon = I2cMonitor(scl, sda, timing)
         target = I2cTarget(scl, sda, 0x50, replies=[0x11, 0x22, 0x33, 0x44, 0x55])
-        await tb.write(R.addr("CLKDIV_INT", 0), [i2c_clkdiv(timing.f_scl)])
         await tb.enable(1)
         # Write three bytes.
         res = await run_cmds(tb, 0, i2c_write_cmds(0x50, [0x10, 0xAB, 0xCD]))
         assert all(ack for _, ack in res) and [b for b, _ in res] == [0xA0, 0x10, 0xAB, 0xCD]
+        assert mon.scl_rate() >= 0.97 * timing.f_scl, mon.scl_rate()  # really runs at 100 / 400 kHz
         # Write a register address, then read four bytes after a repeated START.
         res = await run_cmds(tb, 0, i2c_write_cmds(0x50, [0x20], stop=False) + i2c_read_cmds(0x50, 4))
         assert [b for b, _ in res[3:]] == [0x11, 0x22, 0x33, 0x44]
@@ -81,7 +82,8 @@ async def test_i2c_controller_stretch_timeout(dut):
     tb = TB(dut)
     await tb.start()
     scl, sda = lines(dut)
-    await tb.load(load_program("i2c_ctrl"), 0, clkdiv=i2c_clkdiv(400e3), tmo=300)
+    div, defines = i2c_timing(400e3)
+    await tb.load(load_program("i2c_ctrl", **defines), 0, clkdiv=div, tmo=300)
     await tb.enable(1)
     target = I2cTarget(scl, sda, 0x50)
     target.hold_scl_forever = True

@@ -65,12 +65,18 @@ class I2cMonitor:
         self.in_frame = False
         self._bits: list[int] = []
         self._bit_at_rise = 1
+        self._rises: list[float] = []
         self._scl_rise = self._scl_fall = self._sda_change = self._stop = self._start = None
         self._first_fall_after_start = False
         self._task = cocotb.start_soon(self._run())
 
     def stop(self):
         self._task.cancel()
+
+    def scl_rate(self) -> float:
+        """SCL frequency inside a byte: from the median rise-to-rise period in frames (Hz)."""
+        p = sorted(b - a for a, b in zip(self._rises, self._rises[1:]))
+        return 1e9 / p[len(p) // 2] if p else 0.0
 
     def _check(self, what: str, value: float, minimum: float):
         if value + self.tol < minimum:
@@ -98,6 +104,8 @@ class I2cMonitor:
                     and self._sda_change > self._scl_fall:
                 self._check("tSU;DAT", t - self._sda_change, self.t.t_su_dat)
             self._scl_rise = t
+            if self.in_frame:
+                self._rises.append(t)
         else:  # falling
             if self.in_frame:
                 if self._scl_rise is not None:

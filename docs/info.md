@@ -35,6 +35,10 @@ The 19 protocol pins form one pin space, PIN0 to PIN18, that every engine can us
 | PIN5..PIN10 | `uo_out[0]`..`uo_out[5]` | output |
 | PIN11..PIN18 | `uio[0]`..`uio[7]` | bidirectional, optional open drain |
 
+Programs in the repository (each tested against an independent model of the other end of the wire): UART
+(9600–921600 baud), SPI controller (modes 0–3) and target, I2C controller (100/400 kHz) and target, WS2812, JTAG,
+SWD, PS/2, CAN 2.0A, low-speed USB packets and 1-Wire.
+
 Full documentation: `docs/architecture.md`, `docs/isa.md`, `docs/regmap.md` and `docs/programming_guide.md` in the
 project repository.
 

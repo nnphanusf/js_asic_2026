@@ -4,14 +4,18 @@
 ; Both are open drain: level 0 pulls the line low, level 1 releases it. External pull-ups are needed.
 
 .define ADDR 0x42             ; the target's 7-bit address
+.define T_LOW 5               ; i2c_ctrl: SCL low ticks per bit
+.define T_HIGH 5              ; i2c_ctrl: SCL high ticks per bit (at least T_HIGH - 1 after stretching)
 
 .program i2c_ctrl
 ; I2C controller with repeated START and clock stretching.
-; A bit takes 10 ticks: SCL low 5, high 5, and SCL stays high for at least 4 ticks after any clock
-; stretching ends. clkdiv 60 gives standard mode at 100 kHz; clkdiv 16 gives fast mode at 375 kHz
-; (tLOW needs 5 ticks >= 1.3 us). Every SCL release waits until SCL is really high, so targets can
-; stretch the clock; inside a byte that wait is bounded by TMO ticks, after which the program raises
-; IRQ flag 0 (relative to the engine) and waits for the host to clear it.
+; A bit takes T_LOW + T_HIGH ticks, and SCL stays high for at least T_HIGH - 1 ticks after any clock
+; stretching ends. bitweaver.proto.i2c_timing picks the split and the divider:
+;   standard mode, 100 kHz: T_LOW 5, T_HIGH 5, clkdiv 60 (tLOW 5 us >= 4.7, tHIGH >= 4 us)
+;   fast mode, 400 kHz:     T_LOW 6, T_HIGH 4, clkdiv 15 (tLOW 1.5 us >= 1.3, tHIGH >= 0.75 us >= 0.6)
+; Every SCL release waits until SCL is really high, so targets can stretch the clock; inside a byte
+; that wait is bounded by TMO ticks, after which the program raises IRQ flag 0 (relative to the
+; engine) and waits for the host to clear it.
 ;
 ; Host protocol: one command word per byte, sent MSB first from the OSR:
 ;   bit 15     START (or repeated START) before the byte
@@ -36,11 +40,11 @@ cmd:
 byte:
     set y, 8                  ; eight data bits and the ACK bit
 bit:
-    out pins, 1  [3]          ; SDA changes while SCL is low
+    out pins, 1  [T_LOW-2]    ; SDA changes while SCL is low
     nop side 1                ; release SCL
     wait 1 pin 31 timeout     ; clock stretching, bounded by TMO; success skips the next instruction
     jmp stuck
-    in pins, 1   [2]          ; sample SDA
+    in pins, 1   [T_HIGH-3]   ; sample SDA
     jmp y-- bit  side 0       ; SCL low
     out x, 1                  ; STOP?
     jmp !x cmd

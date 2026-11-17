@@ -3,84 +3,95 @@
 Deadline 2027-01-18 (RTL freeze 2027-01-08). See `PLAN.md` for the full brief. This file is the running log:
 what is done, what is next, and every decision with its reason.
 
-## Status at a glance
-- Phase 0 (setup, spec): done.
-- Phase 1 (ISS, assembler, first RTL): done locally; waiting for the full-design GDS run.
-- Phase 2 (full cluster, core protocols): cluster RTL done (4 engines, BAU, open drain, WAIT timeout, timestamp,
-  FIFO join/chain, IRQs); UART done; SPI and I2C next.
+## Status at a glance (2026-11-17)
+- Phases 0–4 are done locally: spec, toolchain, RTL, core protocols, verification depth, stretch protocols.
+- Phase 5 (write-up) is drafted: architecture, ISA, programming guide, verification, results, AI usage.
+- Waiting on CI for the full design: the first `gds` run of the complete RTL (commit 793167b) was still routing
+  after 80 minutes. The later commits need a push and a green run of `gds`, `precheck`, `gl_test`, `test`,
+  `lockstep` and `formal`.
 
-## Phase 0: Setup and spec (Nov 14–20)
-- [x] Repo created from `ttihp-verilog-template` (`nnphanusf/js_asic_2026`)
-- [x] Local toolchain: OSS CAD Suite 2026-11-16 in `~/tools/oss-cad-suite` (iverilog 14, Verilator 5.055,
-      Yosys 0.71, SymbiYosys, cocotb 2.1)
-- [x] IHP SG13CMOS5L liberty and Verilog cell models in `~/tools/pdk/ihp-sg13cmos5l/libs.ref` (from the IHP open
-      PDK repo) for local area estimates and gate-level simulation
-- [x] `info.yaml` filled: title, author, description, 8x4 tiles, 60 MHz, top module, pinout
-- [x] `gds` + precheck green at 8x4 / 60 MHz on 3627c90 (probe design, 300 cells)
-- [x] `viewer` job green; layout viewer at https://nnphanusf.github.io/js_asic_2026/
-- [x] Spec: `sw/bitweaver/regmap.py` (single source of truth) generates `src/bw_defs.vh` and `docs/regmap.md`
-- [x] Area check against the IHP library: `scripts/synth_area.sh`; numbers in `docs/results.md`
-- [ ] Confirm how the demo board's RP2040/RP2350 drives `ui_in` (TT MicroPython SDK) for the host driver
+## Phase 0: Setup and spec
+- [x] Repo from `ttihp-verilog-template`; OSS CAD Suite 2026-11-16 in `~/tools/oss-cad-suite`
+- [x] IHP SG13CMOS5L liberty and cell models in `~/tools/pdk/ihp-sg13cmos5l/libs.ref` (from the IHP open PDK repo)
+      for local area estimates and gate-level simulation
+- [x] `info.yaml` (8x4, 60 MHz, all source files), `docs/info.md` datasheet
+- [x] `gds` + precheck green at 8x4 / 60 MHz on the probe design (3627c90); viewer at
+      https://nnphanusf.github.io/js_asic_2026/
+- [x] Spec: `sw/bitweaver/regmap.py` generates `src/bw_defs.vh` and `docs/regmap.md`; `docs/isa.md`
+- [x] Area check against the IHP library: `scripts/synth_area.sh`
+- [x] Demo-board host path: the TT MicroPython SDK's `ttboard.util.platform.write_ui_in_byte` /
+      `read_uo_out_byte` (fast byte I/O); `sw/host/micropython/bitweaver.py` bit-bangs the host SPI port with them
 
 ## Phase 1: Executable spec and first silicon path
-- [x] `sw/bitweaver`: register map, assembler/disassembler (labels, .side_set, .wrap, .define, .pins, .shift,
-      .clkdiv, .fifo, .timeout, .bau, .init, .entry), loader, cycle-accurate ISS. 62 pytest tests.
-- [x] RTL: `bw_host_spi`, `bw_imem`, `bw_sm`, `bw_fifo`, `bw_clkdiv`, `bw_bau`, top level with pin mux,
-      synchronizers and glitch filters. Verilator `-Wall` lint clean.
-- [x] Lock-step cocotb testbench (`test/lib/bwtb.py`): the RTL and the ISS get the same sampled inputs and must
-      produce identical `uo_out/uio_out/uio_oe` on every cycle, in every test.
-- [x] 32 smoke and per-instruction RTL tests, all in lock-step.
-- [x] UART TX/RX (`sw/programs/uart.bw`) against `cocotbext-uart`: 9600, 115200, 230400, 460800, 921600 baud,
-      8N1 and 8E1, framing error, full-duplex loopback. 5 tests.
-- [ ] Full GDS + precheck + GL test green on the full design
+- [x] `sw/bitweaver`: register map, assembler/disassembler, loader and load-image builder, cycle-accurate ISS,
+      protocol host helpers. 74 pytest tests.
+- [x] RTL: host SPI, IMEM, 4 engines with FIFO, clock divider, BAU; top level with pin merge, synchronizers, glitch
+      filters, open drain, timestamp, IRQs. Verilator `-Wall` clean.
+- [x] Lock-step cocotb testbench: every test compares all outputs with the ISS on every cycle.
+- [x] UART TX/RX against `cocotbext-uart`.
+- [ ] Full GDS + precheck + GL test green on the full design (run 44085398579 in progress)
 
 ## Phase 2: Full cluster and core protocols
-- [x] 4 engines, FIFO join and chaining, IRQ flags, open drain, WAIT timeout, timestamp, BAU (in the RTL above)
-- [x] UART
-- [ ] SPI controller modes 0–3, SPI target
-- [ ] I2C controller (100/400 kHz, ACK/NACK, repeated start, clock stretching), I2C target
-- [ ] Concurrency demo: UART + SPI + I2C on 3 engines
+- [x] 4 engines, FIFO join and chaining, IRQ flags, open drain, WAIT timeout, timestamp, BAU
+- [x] UART 9600–921600 baud, 8N1/8E1, framing errors, full duplex
+- [x] SPI controller modes 0–3 (up to 7.5 MHz), SPI target mode 0 (up to ~3 MHz)
+- [x] I2C controller 100 kHz / 400 kHz with repeated START, ACK/NACK, clock stretching, stretch timeout; I2C target
+      (two engines) with clock stretching
+- [x] Concurrency: UART TX + UART RX + SPI + I2C on four engines at once
 
 ## Phase 3: Verification depth and timing closure
-- [ ] Constrained-random lock-step (Verilator), 10M+ cycles over 100+ seeds
-- [ ] Formal: FIFO, host SPI, open drain, PC wrap bounds, opcode covers
-- [ ] Coverage: opcode x option functional coverage, Verilator line/toggle coverage
-- [ ] GL simulation of the full suite
-- [ ] Timing: read LibreLane STA, confirm 60 MHz
+- [x] Constrained-random lock-step in Verilator (`verif/lockstep`): 100M cycles over 1000 seeds, no mismatch;
+      CI runs 10M cycles over 50 seeds per push
+- [x] Formal: FIFO order/no overflow (proved), host SPI no deadlock (proved), engine invariants incl. PC within the
+      wrap range (proved), open drain never drives high (proved), covers for every opcode
+- [x] Coverage: functional 465/465 bins, Verilator line 100 %, toggle 99.1 %
+- [x] GL simulation of the full suite on the Yosys/IHP netlist locally; CI `gl_test` on the routed netlist pending
+- [ ] Timing: read LibreLane STA for the full design (ABC estimate 9.1 ns at the slow corner, budget 16.7 ns)
 
 ## Phase 4: Stretch protocols
-- [ ] WS2812, JTAG, SWD, PS/2, CAN, USB LS, 10BASE-T (in that order)
+- [x] WS2812, JTAG, SWD, PS/2, CAN 2.0A (TX/RX, BAU stuffing + CRC15), low-speed USB packets (TX/RX, BAU NRZI +
+      stuffing + CRC16), plus 1-Wire
+- [x] 10BASE-T: **cut** (see decisions)
 
 ## Phase 5: Write-up
-- [ ] architecture.md, isa.md, programming_guide.md, verification.md, results.md, ai_usage.md
+- [x] `architecture.md`, `isa.md`, `programming_guide.md`, `verification.md`, `results.md`, `ai_usage.md`, README
+- [ ] Final numbers from the full-design GDS run into `results.md`
 
 ## Decisions
-- **2026-11-17 Reset:** asynchronous assert, synchronous release through a 2-FF reset synchronizer in the top
-  level. IHP has no flop without a reset pin, so async reset costs no area, and the synchronizer keeps release
-  clean. The ISS models the two release cycles.
-- **2026-11-17 Area guardrail:** the full design maps to 27.4K IHP cells (39 % of the 8x4 core). That is over the
-  PLAN's 24K cell guardrail, but the guardrail exists to leave at least 25 % headroom for CTS and routing, and 39 %
-  utilisation leaves far more. The IMEM read ports (12K generic cells) dominate; if routing or timing fails, the
-  first cut is a latch-based IMEM or 32 entries, as PLAN orders. No feature cut so far.
-- **2026-11-17 Includes:** RTL files `` `include "bw_defs.vh" ``. LibreLane's linter resolves includes relative to
-  the including file (`LINTER_RELATIVE_INCLUDES`, default on) and Yosys does the same, so no include path is needed
-  in the flow; local lint needs `--relative-includes`.
-- **2026-11-17 Instruction fetch:** IR is loaded at the end of each cycle from memory[next PC] (write-first), so an
-  instruction executes on the cycle after its PC is computed with no extra pipeline stage and no branch penalty.
-- **2026-11-17 Jump targets** are 5 bits relative to the engine's ORG register, so programs are position independent
-  and up to 32 instructions long. Four engines share the 64 words.
-- **2026-11-17 Virtual pins 19..31** expose TX-empty, RX-full, BAU stuff/error and the eight IRQ flags to
-  `WAIT PIN`, `JMP PIN` and `IN PINS`. This replaces a separate WAIT source for status and costs a 32:1 mux.
-- **2026-11-17 Parity** (8E1/8O1) is done by the host and a 9-bit program variant, not by hardware.
-- **2026-11-17 UART pins** default to PIN3 (`ui_in[3]`) and PIN9 (`uo_out[4]`), the pins wired to the TT demo
-  board's UART.
-
-## Bugs found by lock-step
-- ISS applied a `TS_PRESCALE` write to the timestamp in the same cycle; the RTL (correctly) applies it from the next
-  cycle. Fixed in the ISS.
+- **Reset:** asynchronous assert, synchronous release through a 2-FF synchronizer. IHP has no flip-flop without a
+  reset pin, so async reset costs no area. The ISS models the two release cycles.
+- **Area guardrail:** the full design maps to 27.4K IHP cells (about 39 % of the 8x4 core). That is over the PLAN's
+  24K-cell guardrail, but the guardrail exists to leave at least 25 % headroom for CTS and routing, and 39 %
+  utilisation leaves far more. No feature was cut for area. If routing or timing fails, the first cut is the
+  IMEM read ports (latch-based IMEM or 32 entries), as PLAN orders.
+- **Includes:** RTL files `` `include "bw_defs.vh" ``; LibreLane's linter and Yosys resolve includes relative to
+  the including file, so local lint needs `--relative-includes`.
+- **Instruction fetch:** IR is loaded at the end of each cycle from memory[next PC] (write-first), so there is no
+  fetch bubble and no branch penalty.
+- **Jumps** are 5 bits relative to ORG (position-independent programs). Programs may be up to 64 instructions
+  long but jump targets must be in the first 32 (the I2C target needs 41 instructions).
+- **Virtual pins 19..31** expose TX-empty, RX-full, BAU stuff/error and the IRQ flags to WAIT/JMP/IN.
+- **Parity** for UART is done by the host with a 9-bit program variant.
+- **UART pins** default to PIN3/PIN9, the TT demo board's UART pins.
+- **Receive-only and transmit-only programs join their FIFOs** (8 deep): found when the four-protocol concurrency
+  test lost a UART byte while the host served other engines.
+- **I2C bit timing:** 10 ticks per bit with the low/high split set by assembler defines
+  (`bitweaver.proto.i2c_timing`): 5/5 at clkdiv 60 for 100 kHz (SCL stays high ≥ 4 us even after stretching),
+  6/4 at clkdiv 15 for 400 kHz (tLOW 1.5 us ≥ 1.3). A fixed 5/5 split could only reach 375 kHz in fast mode.
+- **WS2812** uses an integer divider (7, 857 kHz): the fractional 7.5 made some T0H pulses 383 ns (limit 380).
+- **10BASE-T cut:** the host SPI port tops out at clk/8 = 7.5 Mbit/s raw, below the 10 Mbit/s line rate, and an
+  8-word FIFO cannot hold even the 64-bit preamble plus a minimal frame. PLAN says to attempt it only if the timing
+  math works; it does not. The BAU's Manchester mode is still implemented and tested.
+- **USB** is demonstrated at the packet level (SYNC, PID, data, CRC, EOP both ways), not as a full device stack,
+  which would need a CPU-speed host behind the FIFOs.
+- **CAN** uses hard synchronization on SOF only; no arbitration, retransmission or error frames. Documented in
+  `can.bw`.
+- **Board driver:** assembly happens on the PC; the board replays load images (lists of register writes), so the
+  MicroPython side needs no assembler.
 
 ## Notes
-- LibreLane's `Checker.DisconnectedPins` fails the GDS build if any input pad drives no logic. Keep at least one real
-  path from every input pin (including `ena`, `clk`, `rst_n`) to an output. `ena` gates the timestamp counter.
+- LibreLane's `Checker.DisconnectedPins` fails the build if any input pad drives no logic; `ena` gates the
+  timestamp, every other input reaches the engines or the host port.
 - `make` in `test/` returns success even when tests fail; always run `cocotb_tools.check_results`.
 - Waveforms are off by default; `make WAVES=1` dumps `tb.fst`.
+- To run a second cocotb job while another uses `test/`, pass `SIM_BUILD=sim_build/rtl2 COCOTB_RESULTS_FILE=...`.

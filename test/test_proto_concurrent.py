@@ -12,7 +12,7 @@ from cocotbext.spi import SpiBus, SpiConfig
 from cocotbext.uart import UartSink, UartSource
 
 from bitweaver.asm import load_program
-from bitweaver.proto import i2c_clkdiv, i2c_read_cmds, i2c_result, i2c_write_cmds, spi_frame, uart_clkdiv
+from bitweaver.proto import i2c_read_cmds, i2c_result, i2c_timing, i2c_write_cmds, spi_frame, uart_clkdiv
 from bwtb import TB
 from i2c_bfm import FAST, I2cMonitor, I2cTarget, Line
 from spi_models import StreamTarget
@@ -27,7 +27,8 @@ async def test_four_protocols_concurrently(dut):
     await tb.load(load_program("uart_tx"), 0, clkdiv=uart_clkdiv(baud))
     await tb.load(load_program("uart_rx"), 1, clkdiv=uart_clkdiv(baud))
     await tb.load(load_program("spi_ctrl_cpha0", file="spi"), 2, clkdiv=3)
-    await tb.load(load_program("i2c_ctrl"), 3, clkdiv=i2c_clkdiv(400e3), in_base=16, out_base=16, set_base=16,
+    i2c_div, i2c_defines = i2c_timing(400e3)
+    await tb.load(load_program("i2c_ctrl", **i2c_defines), 3, clkdiv=i2c_div, in_base=16, out_base=16, set_base=16,
                   side_base=15, dirs_pins=[15, 16], high_pins=[15, 16], od_pins=[15, 16])
     assert tb.origin == 4 + 11 + 11 + 25
 
