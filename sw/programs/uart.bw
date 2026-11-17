@@ -1,0 +1,43 @@
+; UART transmitter and receiver.
+;
+; Frame: start bit, DATA_BITS data bits LSB first, one stop bit. Parity is handled by the host:
+; for 8E1 or 8O1, assemble with DATA_BITS = 9 and put the parity bit in bit 8 of each word.
+; One bit takes 8 engine ticks, so set the clock divider to f_clk / (8 * baud):
+; 60 MHz / (8 * 115200) = 65.10.
+;
+; Default pins follow the Tiny Tapeout demo board, where the RP2040 UART is wired to
+; ui_in[3] (PIN3, into the chip) and uo_out[4] (PIN9, out of the chip). Override them at load time.
+
+.define DATA_BITS 8
+
+.program uart_tx
+; Pull a word from the TX FIFO and send its low DATA_BITS bits. The line idles high.
+.side_set 1 opt
+.pins out=9 set=9 side=9 out_count=1 set_count=1
+.init set pins, 1
+.init set pindirs, 1
+    pull               side 1 [7]   ; stop bit, or idle while the FIFO is empty
+    set x, DATA_BITS-1 side 0 [7]   ; start bit
+bitloop:
+    out pins, 1                     ; one data bit ...
+    jmp x-- bitloop          [6]    ; ... held for 8 ticks
+
+.program uart_rx
+; Receive frames and push each one to the RX FIFO, right aligned. A frame whose stop bit is low
+; raises IRQ flag 4 (relative to the engine) and is dropped.
+.pins in=3 jmp=3
+.shift in=right
+start:
+    wait 0 pin 0                   ; start bit
+    set x, DATA_BITS-1 [10]        ; wait until the middle of the first data bit
+bitloop:
+    in pins, 1                     ; sample a data bit ...
+    jmp x-- bitloop [6]            ; ... every 8 ticks
+    jmp pin good                   ; the stop bit must be high
+    irq 4 rel                      ; framing error
+    mov isr, null
+    wait 1 pin 0                   ; wait for the line to go idle
+    jmp start
+good:
+    in null, 16-DATA_BITS          ; right-align the data
+    push

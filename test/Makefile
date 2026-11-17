@@ -35,6 +35,11 @@ VERILOG_SOURCES += $(PWD)/gate_level_netlist.v
 
 endif
 
+# Waveforms are off by default (the full suite runs millions of cycles); use `make WAVES=1` to dump tb.fst.
+ifneq ($(WAVES),1)
+COMPILE_ARGS    += -DNO_DUMP
+endif
+
 # Allow sharing configuration between design and testbench via `include`:
 COMPILE_ARGS 		+= -I$(SRC_DIR)
 
@@ -46,7 +51,7 @@ TOPLEVEL = tb
 export PYTHONPATH := $(PWD)/lib:$(PWD)/../sw:$(PYTHONPATH)
 
 # List test modules to run, separated by commas and without the .py suffix:
-COCOTB_TEST_MODULES ?= test_smoke,test_isa
+COCOTB_TEST_MODULES ?= test_smoke,test_isa,test_proto_uart
 
 # include cocotb's make rules to take care of the simulator setup
 include $(shell cocotb-config --makefiles)/Makefile.sim

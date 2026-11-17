@@ -9,50 +9,63 @@ You can also include images in this folder and reference them in the markdown. E
 
 ## How it works
 
-Bitweaver is a programmable protocol emulator. Instead of fixed UART, SPI or I2C blocks, it has four small
-cycle-exact engines that wiggle and sample pins under firmware control. A protocol is a short program, so the chip
-can be reprogrammed after fabrication to speak protocols it was never designed for.
+Bitweaver is a programmable protocol emulator. It has no fixed UART, SPI or I2C blocks. Instead, four small
+engines that keep exact cycle timing drive and sample pins under firmware control. A protocol is a short program, so
+the chip can be reprogrammed after fabrication to speak protocols it was never designed for.
 
-Planned architecture (status: Phase 0 skeleton; protocol pins idle, host port answers a bring-up probe):
+- **Four engines (SM0 to SM3)** share a 64 x 16-bit instruction memory. Each has a program counter, scratch
+  registers X and Y, input and output shift registers with automatic push and pull, 4-deep TX and RX FIFOs (one
+  8-deep FIFO when joined), a 16.8 fractional clock divider, up to three side-set pins and a 5-bit delay field on
+  every instruction.
+- **Instruction set:** `JMP` (always, X or Y zero, decrement, X!=Y, pin, OSR not empty), `WAIT` (pin or IRQ flag,
+  optionally with a timeout), `IN`, `OUT`, `PUSH`, `PULL`, `MOV` (invert, bit-reverse, byte-swap), `IRQ` (set, wait,
+  clear; eight shared flags) and `SET`. Instructions can also be injected from the host or from a FIFO.
+- **Bit-level assist unit** in every engine: NRZI coding, bit stuffing and destuffing, Manchester encoding and a
+  CRC with a programmable polynomial of up to 16 bits, all on the one-bit shift path.
+- **Open-drain mode** on the bidirectional pins for I2C and other wired-AND buses, a free-running 16-bit timestamp
+  that programs can sample, 2-FF input synchronizers with optional glitch filters, and FIFO chaining between
+  engines.
+- **Host SPI port** to load programs, configure engines and move data at run time.
 
-- **Four engines (SM0 to SM3)** share a 64 x 16-bit instruction memory. Each has a program counter, two scratch
-  registers, input and output shift registers, 4-deep TX and RX FIFOs, a fractional clock divider, side-set pins
-  and a per-instruction delay field.
-- **Instruction set:** jump (with counter and pin conditions), wait (on a pin or flag, with an optional timeout),
-  shift in, shift out, push, pull, move, set, and shared interrupt flags.
-- **Bit-level assist unit** in each engine: NRZI, bit-stuffing, Manchester encoding and a programmable CRC, so
-  low-speed USB and CAN can run in firmware.
-- **Open-drain pin mode** for I2C and other wired-AND buses, a free-running timestamp counter, input synchronizers
-  with glitch filters, and FIFO chaining between engines.
-- **Host SPI port** to load programs, configure engines, and move data at runtime.
+The 19 protocol pins form one pin space, PIN0 to PIN18, that every engine can use:
+
+| Pins | Pads | Direction |
+|---|---|---|
+| PIN0..PIN4 | `ui_in[0]`..`ui_in[4]` | input |
+| PIN5..PIN10 | `uo_out[0]`..`uo_out[5]` | output |
+| PIN11..PIN18 | `uio[0]`..`uio[7]` | bidirectional, optional open drain |
+
+Full documentation: `docs/architecture.md`, `docs/isa.md`, `docs/regmap.md` and `docs/programming_guide.md` in the
+project repository.
 
 ## How to test
 
-The design is driven over the host SPI port (`HOST_CS_N`, `HOST_SCK`, `HOST_MOSI`, `HOST_MISO`), normally from the
+The design is driven over the host SPI port (mode 0, MSB first, SCK at most clk/8), normally from the RP2040 or
 RP2350 on the Tiny Tapeout demo board:
 
-1. Hold `rst_n` low, then release it. All protocol pins start as inputs.
-2. Write a program into instruction memory over the host port.
-3. Configure an engine (pin mapping, clock divider, wrap range) and enable it.
-4. Push data to its TX FIFO and read results from its RX FIFO.
-
-The program is lost whenever the design is deselected, so reload it after each selection. Example programs and a
-MicroPython driver will live in `sw/`.
-
-**Phase 0 bring-up probe.** Until the engines land, the host port is a read-only SPI target (mode 0, MSB first,
-SCK at most clk/8). While `HOST_CS_N` is low, each byte read on `HOST_MISO` is chosen by the previous byte written
-on `HOST_MOSI`; the first byte after `HOST_CS_N` falls is the ID.
-
-| Command | Reply |
+| Signal | Pin |
 |---|---|
-| `0x00` | ID, `0xB7` |
-| `0x01` | `PIN4..PIN0` (`ui_in[4:0]`) |
-| `0x02` | `PIN18..PIN11` (`uio_in[7:0]`) |
-| `0x03` | free-running 8-bit cycle counter |
+| `HOST_CS_N` | `ui_in[7]` |
+| `HOST_SCK` | `ui_in[6]` |
+| `HOST_MOSI` | `ui_in[5]` |
+| `HOST_MISO` | `uo_out[7]` |
+| `HOST_IRQ` | `uo_out[6]` |
 
-For example, sending `01 00` reads back `B7` followed by the state of `ui_in[4:0]`.
+Each SPI frame is `[command] [address] [16-bit data words...]`. Command bit 7 selects write (1) or read (0), bit 6
+auto-increments the address after every word. While the command and address bytes are shifted in, MISO returns the
+ID byte `0xB7` and a FIFO status byte. Register `0x00` reads `0xB717`.
+
+1. Hold `rst_n` low, then release it. All protocol pins start as inputs.
+2. Write a program into instruction memory (addresses `0x80`..`0xBF`).
+3. Configure an engine (registers at `0x20 + 0x10 * n`: clock divider, wrap range, pin bases) and enable it in
+   `CTRL` (`0x02`).
+4. Push data to its TX FIFO and read results from its RX FIFO (offset `0xB` in the engine's register block).
+
+For example, `sw/programs/uart.bw` turns SM0 into a UART transmitter on `uo_out[4]` and SM1 into a receiver on
+`ui_in[3]`, the pins wired to the demo board's UART. The `sw/bitweaver` Python package assembles programs and
+builds the SPI frames; `sw/host/micropython/bitweaver.py` is a driver for the demo board.
 
 ## External hardware
 
-Standard Tiny Tapeout Pmods on the bidirectional header (`uio`), using the usual SPI, UART and I2C pin conventions.
-I2C needs external pull-up resistors on SCL and SDA.
+Standard Tiny Tapeout Pmods on the bidirectional header (`uio`), using the usual SPI, UART and I2C pin
+conventions. I2C needs external pull-up resistors on SCL and SDA.

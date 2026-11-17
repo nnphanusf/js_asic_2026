@@ -1,2 +1,5 @@
 pytest==8.4.2
 cocotb==2.0.1
+cocotbext-uart==0.1.4
+cocotbext-spi==0.6.2
+pyyaml

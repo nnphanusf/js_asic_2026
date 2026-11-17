@@ -404,9 +404,13 @@ class _Asm:
         return p
 
 
-def assemble(source: str) -> dict[str, Program]:
-    """Assemble a source text. Returns the programs by name, in source order."""
+def assemble(source: str, defines: dict | None = None) -> dict[str, Program]:
+    """Assemble a source text. Returns the programs by name, in source order.
+
+    `defines` override (or add) `.define` values at file scope, e.g. {"DATA_BITS": 9}.
+    """
     programs: dict[str, Program] = {}
+    overrides = dict(defines or {})
     globals_: dict = {"BAU_CRC": R.BAU_CRC, "BAU_STUFF": R.BAU_STUFF, "BAU_NRZI": R.BAU_NRZI,
                       "BAU_MAN": R.BAU_MAN, "BAU_RESET": R.BAU_RESET,
                       "TXE": R.VPIN_TXE, "RXF": R.VPIN_RXF, "STUFF": R.VPIN_STUFF, "BERR": R.VPIN_BERR}
@@ -421,12 +425,13 @@ def assemble(source: str) -> dict[str, Program]:
             parts = text.split()
             if len(parts) != 2:
                 raise AsmError("'.program' needs a name", n, raw)
+            globals_.update(overrides)
             cur = _Asm(parts[1], globals_)
             continue
         if cur is None:
             if text.lower().startswith(".define"):
                 parts = text.split()
-                globals_[parts[1]] = _eval(" ".join(parts[2:]), globals_)
+                globals_[parts[1]] = overrides.get(parts[1], _eval(" ".join(parts[2:]), globals_))
                 continue
             raise AsmError("code before '.program'", n, raw)
         while True:
@@ -450,16 +455,25 @@ def assemble(source: str) -> dict[str, Program]:
     return programs
 
 
-def assemble_file(path: str) -> dict[str, Program]:
+def assemble_file(path: str, defines: dict | None = None) -> dict[str, Program]:
     with open(path) as fh:
-        return assemble(fh.read())
+        return assemble(fh.read(), defines)
 
 
-def assemble_one(source: str) -> Program:
+PROGRAM_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "programs")
+
+
+def load_program(name: str, file: str | None = None, **defines) -> Program:
+    """Assemble program `name` from sw/programs/<file>.bw (file defaults to the name's first word)."""
+    file = file or name.split("_")[0]
+    return assemble_file(os.path.join(PROGRAM_DIR, file + ".bw"), defines)[name]
+
+
+def assemble_one(source: str, defines: dict | None = None) -> Program:
     """Assemble a source that holds exactly one program (a '.program' line is optional)."""
     if ".program" not in source:
         source = ".program anon\n" + source
-    progs = assemble(source)
+    progs = assemble(source, defines)
     if len(progs) != 1:
         raise AsmError("expected exactly one program")
     return next(iter(progs.values()))
