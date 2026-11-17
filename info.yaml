@@ -18,6 +18,12 @@ project:
   # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
   source_files:
     - "project.v"
+    - "bw_host_spi.v"
+    - "bw_imem.v"
+    - "bw_clkdiv.v"
+    - "bw_fifo.v"
+    - "bw_bau.v"
+    - "bw_sm.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).

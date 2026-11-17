@@ -15,7 +15,10 @@ every working session.
   yosys, sby or python command. It provides its own Python 3.11 with cocotb.
 - Tests: `cd test && make clean && make && python3 -m cocotb_tools.check_results results.xml`
   (make alone returns success even when tests fail).
-- Lint: `verilator --lint-only -Wall -Wno-DECLFILENAME src/*.v`.
+- Lint: `verilator --lint-only -Wall -Wno-DECLFILENAME --relative-includes src/*.v` (LibreLane resolves
+  `` `include `` relative to the including file, so the generated `src/bw_defs.vh` needs this flag).
+- Python unit tests: `make -C sw test`; regenerate derived files with `make -C sw gen`.
+- Area: `scripts/synth_area.sh` (needs the IHP liberty files in `~/tools/pdk`).
 - CI (`.github/workflows`): `test`, `gds` (LibreLane + precheck), `docs`, `fpga`. CI is the referee: a phase is not
   done while anything is red.
 
