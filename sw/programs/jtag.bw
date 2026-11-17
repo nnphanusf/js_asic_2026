@@ -1,0 +1,17 @@
+; JTAG controller (drives a target's TAP).
+;
+; Each TX word carries eight TCK cycles as (TMS, TDI) bit pairs, first cycle in bits 1:0
+; (bit 1 = TMS, bit 0 = TDI). For every eight cycles the RX FIFO receives the eight TDO bits sampled at
+; the rising edges, first cycle in bit 8 (read the word >> 8). bitweaver.proto.JtagSeq builds the words
+; from TAP operations and decodes the results.
+; A cycle takes 4 ticks: TCK = f_clk / (4 * clkdiv), up to 7.5 MHz at clkdiv 2.
+; Default pins: TCK = PIN5, TDI = PIN6, TMS = PIN7 (uo_out[0..2]), TDO = PIN0 (ui_in[0]).
+
+.program jtag
+.side_set 1
+.pins out=6 out_count=2 side=5 in=0 dirs=5,6,7
+.shift out=right in=right autopull=16 autopush=8
+.wrap_target
+    out pins, 2  side 0 [1]   ; TDI and TMS change while TCK is low (TCK stays low when idle)
+    in pins, 1   side 1 [1]   ; TCK rises: the target samples TDI/TMS, we sample TDO
+.wrap

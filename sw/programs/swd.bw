@@ -1,0 +1,39 @@
+; SWD (Arm Serial Wire Debug) controller: a half-duplex bit pump.
+;
+; The host sends one command word per field of an SWD transaction, then one data word for a write:
+;   bit 15     1 = read (SWDIO released, the target drives it), 0 = write
+;   bits 4:0   number of bits minus one (1..16 bits)
+; A write command is followed by a data word, sent LSB first. A read command pushes one word holding
+; the bits read, right aligned after the host shifts it: value = word >> (16 - count).
+; bitweaver.proto.SwdSeq builds whole transactions (request, turnaround, ACK, data, parity).
+; SWDIO changes while SWCLK is low; the target samples it on the rising edge. Read bits are sampled at
+; the rising edge too: the target drives them after the previous rising edge.
+; A cycle takes 4 ticks: SWCLK = f_clk / (4 * clkdiv).
+; Default pins: SWCLK = PIN11 (uio[0]), SWDIO = PIN12 (uio[1]).
+
+.program swd
+.side_set 1 opt
+.pins out=12 out_count=1 set=12 set_count=1 in=12 side=11 dirs=11,12 high=12
+.shift out=right in=right
+.wrap_target
+cmd:
+    pull            side 0      ; command (SWCLK stays low while idle)
+    out x, 5                    ; bit count - 1
+    out null, 10
+    out y, 1                    ; direction
+    jmp !y write
+    set pindirs, 0              ; release SWDIO
+read:
+    nop             side 0 [1]
+    in pins, 1      side 1      ; rising edge: sample what the target drove after the last one
+    jmp x-- read
+    push
+    jmp cmd
+write:
+    pull                        ; data word
+    set pindirs, 1
+wbit:
+    out pins, 1     side 0 [1]  ; data while SWCLK is low
+    nop             side 1      ; the target samples on the rising edge
+    jmp x-- wbit
+.wrap

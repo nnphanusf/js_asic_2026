@@ -1,0 +1,26 @@
+; PS/2 receiver (host side): keyboard or mouse to host.
+;
+; The device drives CLK (10..16.7 kHz) and DATA, both open drain; DATA is valid on the falling edge
+; of CLK. A frame is 11 bits: start 0, eight data bits LSB first, odd parity, stop 1. Each frame is
+; pushed as one word; bitweaver.proto.ps2_decode checks it: frame = word >> 5.
+; The glitch filter is on for both lines. A timed WAIT acts as a frame watchdog: if CLK stops for
+; TMO ticks in the middle of a frame, the partial frame is dropped and the receiver resynchronizes.
+; At clkdiv 4 a tick is 67 ns; TMO 3000 is 200 us, more than two bit times.
+; Default pins: DATA = PIN15 (uio[4]), CLK = PIN16 (uio[5]).
+
+.program ps2_rx
+.pins in=15 filter=15,16 od=15,16
+.shift in=right autopush=11
+.fifo join_rx                 ; receive only: one 8-deep RX FIFO
+.clkdiv 4
+.timeout 3000
+.wrap_target
+bit:
+    wait 0 pin 1 timeout      ; falling edge of CLK; success skips the next instruction
+    jmp resync                ; CLK idle for too long
+    in pins, 1                ; DATA
+    wait 1 pin 1              ; CLK high again
+.wrap
+resync:
+    mov isr, null             ; drop a partial frame (between frames the ISR is empty anyway)
+    jmp bit

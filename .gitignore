@@ -23,3 +23,5 @@ verif/lockstep/work/
 verif/lockstep/coverage/
 verif/lockstep/lockstep_log.jsonl
 runs/
+results_b.xml
+test/results_b.xml
