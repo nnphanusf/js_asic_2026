@@ -51,7 +51,8 @@ reproduced with `make run FIRST=<seed> SEEDS=1`.
 
 | Campaign | Seeds | Cycles | Result |
 |---|---|---|---|
-| Local, 2026-11-17 | 1000 × 100 000 | 100 000 000 | all identical |
+| Local, 2026-11-19 (two engines) | 1000 × 100 000 | 100 000 000 | all identical |
+| Local, 2026-11-17 (four engines) | 1000 × 100 000 | 100 000 000 | all identical |
 | CI (`lockstep` workflow, every push) | 50 × 200 000 | 10 000 000 | all identical |
 
 ## 3. Protocols against independent models
@@ -104,12 +105,15 @@ holes.
 |---|---|
 | Functional bins (465 reachable) | 465 / 465 (100 %) |
 | Verilator line coverage | 100 % (287 / 287 lines) |
-| Verilator toggle coverage | 99.1 % (7379 / 7448 points); all 69 missing points are bits that cannot change |
+| Verilator toggle coverage | 97.8 % (6394 / 6540 points); all 146 missing points are bits that cannot change |
 
-The 69 untoggled points were each checked: `PIN_OUT`/`PIN_OE` bits of the input-only pins (20), `PAD_OD` bits of
-pins without open drain (22), `PAD_FILT` bits of output-only pins (12), FIFO depth bits that are 0 for every
-depth 0/4/8 (8), the always-zero virtual pin 23 (2), each engine's constant number (2), and two bits of the shift
-count arithmetic that are constant because counts are 1..16 (3). Synthesis removes all of them.
+The 146 untoggled points were each checked: the status bits that the register layout reserves for engines 2 and 3,
+which the two-engine chip does not have (`INT_STAT`, `FSTAT`, `FDEBUG`, the SPI status byte: 76), `PIN_OUT`/`PIN_OE`
+bits of the input-only pins (20), `PAD_OD` bits of pins without open drain (22), `PAD_FILT` bits of output-only
+pins (12), FIFO depth bits that are 0 for every depth 0/4/8 (8), the always-zero virtual pin 23 (2), the engines'
+constant numbers (3), and bits of the shift-count arithmetic that are constant because counts are 1..16 (3).
+Synthesis removes all of them. (A first two-engine campaign also left bit 6 of the write address untoggled, a real
+stimulus gap: the generator never wrote to empty address windows. It now does.)
 
 With 1000 seeds the random campaign reaches every bin. At 200 seeds it missed one, `OUT X, BAU` while a stuff bit
 is due, which now also has a directed test (`test_isa.test_bau_stuff_bit_into_register`).
@@ -119,7 +123,8 @@ is due, which now also has a directed test (`test_isa.test_bau_stuff_bit_into_re
 The whole cocotb suite also runs on gate-level netlists (`make GATES=yes`), with lock-step off (the netlist has no
 internal state to compare; outputs are still checked by the protocol models and expected values):
 
-* locally, on the Yosys netlist mapped to the IHP SG13CMOS5L cells (`scripts/synth_area.sh`): 53 / 53 tests pass (7 minutes);
+* locally, on the Yosys netlist mapped to the IHP SG13CMOS5L cells (`scripts/synth_area.sh`): 53 / 53 tests pass, for the
+  four-engine and again for the two-engine design;
 * in CI, on the routed netlist from LibreLane (`gds` workflow, `gl_test` job).
 
 ## Bugs found, and by what

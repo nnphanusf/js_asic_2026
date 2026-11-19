@@ -26,3 +26,4 @@ runs/
 results_b.xml
 test/results_b.xml
 sw/build/
+test/results_gl.xml

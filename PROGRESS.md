@@ -3,9 +3,21 @@
 Deadline 2027-01-18 (RTL freeze 2027-01-08). See `PLAN.md` for the full brief. This file is the running log:
 what is done, what is next, and every decision with its reason.
 
-## Final report (2026-11-17)
+## Status (2026-11-19)
 
-**What was built.** Bitweaver, `tt_um_nnphanusf_bitweaver`, 8x4 tiles on IHP SG13CMOS5L at 60 MHz: four
+**The four-engine design did not route; the chip is now two engines.** All three `gds` runs of the four-engine
+RTL (793167b, a1e294a, ab202af) were cancelled at GitHub's 6-hour job limit. The raw log of ab202af shows why:
+synthesis to post-CTS resizing took 6 minutes, but global placement reported 20–45 % of routing tiles
+overflowed at 50 % utilisation, global routing took 48 minutes and finished congested, and detailed routing had
+296 679 violations after its first 3-hour pass and 348 317 partway through the second. A Tiny Tapeout tile gives
+signals only Metal2–Metal4, and the design was dominated by wide multiplexers (five 64:1 x 16 read ports over the
+1024 instruction-memory bits, four engines). Following PLAN's cut order (engine count first), commit 297df42:
+- two engines instead of four (every protocol program still fits; none needs more than two engines);
+- no host read port on the instruction memory (words are read back through an engine: EXEC a `JMP`, read `EXEC`);
+- `PL_TARGET_DENSITY_PCT` 60 → 40 to spread placement.
+Result: 15 288 IHP cells, 230 944 um2 (57 % of before), about 30 % utilisation; ABC slow-corner estimate 8.67 ns.
+
+**What was built.** Bitweaver, `tt_um_nnphanusf_bitweaver`, 8x4 tiles on IHP SG13CMOS5L at 60 MHz: two
 programmable bit-banging engines sharing a 64 x 16-bit instruction memory, a PIO-class ISA extended with a timed
 WAIT, a bit-level assist unit (NRZI, bit stuffing, Manchester, programmable CRC), open-drain pads, input glitch
 filters, a timestamp source, FIFO joining and chaining, and a register-mapped SPI host port. Toolchain in
@@ -15,38 +27,29 @@ driver for the demo board, 18 protocol programs and the documentation set in `do
 **Protocols working** (each against an independent model of the other end): UART 9600–921600 baud 8N1/8E1, SPI
 controller modes 0–3 up to 7.5 MHz, SPI target, I2C controller at 100 and 400 kHz with every timing limit checked,
 I2C target (two engines), WS2812, JTAG, SWD, PS/2, CAN 2.0A at 500 kbit/s and 1 Mbit/s, low-speed USB packets,
-1-Wire, and UART + UART + SPI + I2C on four engines at once.
+1-Wire, and SPI + I2C on both engines at once.
 
-**Verification.**
-- pytest: 74 tests (assembler, simulator rules, generated files, every program, board driver).
-- cocotb: 53 tests, all in cycle-by-cycle lock-step with the simulator; all pass at RTL and on the Yosys/IHP
-  gate-level netlist locally.
-- Constrained-random lock-step (Verilator): 100M cycles over 1000 seeds, no mismatch; CI runs 10M per push.
-- Formal (SymbiYosys): FIFO ordering, host-port no-deadlock, engine invariants (PC within wrap range etc.) and
-  open drain all proved unbounded; covers reached for every opcode.
-- Coverage: functional 465/465 bins; Verilator line 100 %, toggle 99.1 % (the 69 missing points are constant bits).
+**Verification of the two-engine RTL.**
+- pytest: 77 tests. cocotb: 53 tests, all in cycle-by-cycle lock-step with the simulator, all passing.
+- Constrained-random lock-step (Verilator): 100M cycles over 1000 seeds, no mismatch; functional coverage
+  465/465 bins, line coverage 100 %.
+- Toggle coverage 97.8 % (all 146 missing points are constant bits, listed in `docs/verification.md`).
+- Formal: all four jobs pass in CI on 297df42 (FIFO ordering, host-port no-deadlock and engine invariants proved
+  unbounded; open drain proved); covers reached for every opcode.
+- Gate level: 53/53 cocotb tests pass on the Yosys/IHP netlist of the two-engine design.
+- CI on 297df42: `test`, `lockstep`, `formal`, `docs` green.
 
-**Area and timing.** 27.4K IHP cells, about 386 000 um2, about 39 % of the 8x4 core (Yosys + ABC). ABC critical
-path estimate 9.07 ns at the slow corner without wire load, against 16.67 ns. LibreLane numbers: see CI status.
+**Cut.** Two of the four engines and the instruction-memory host read port (routing, above); 10BASE-T (host port
+bandwidth below the line rate). 1-Wire was added for the programming guide.
 
-**Cut.** 10BASE-T (host port bandwidth below the line rate; see decisions). Nothing else from PLAN was cut;
-1-Wire was added for the programming guide.
-
-**CI status at the end of this session.** On ab202af (the final commit): `test`, `lockstep`, `formal` (all four
-jobs) and `docs` green. (`formal` had failed once on a1e294a only because the OSS CAD Suite download hit GitHub's
-anonymous API rate limit; fixed by passing `GITHUB_TOKEN`.) `gds` for the full design: three hardening runs
-(793167b, a1e294a, ab202af; identical RTL apart from `ifdef FORMAL` blocks) were in progress, the oldest after
-3 h 40 min; results go into `docs/results.md`.
+**Open.** The `gds` run of 297df42 (two engines) decides whether the chip is buildable: `gds`, `precheck`,
+`gl_test` and `viewer` must be green. If routing still fails, the next cuts in PLAN's order are IMEM depth (32
+words) and FIFO depth.
 
 **Steps left for the human.**
-1. Confirm the full-design `gds`, `precheck`, `gl_test` and `viewer` jobs pass, then merge `phase0-setup` into
-   `main`. (The repository was briefly private during this session and is public again.)
-2. Each push runs `gds`, about three hours of runner time; consider whether doc-only pushes should skip it.
-3. Optionally skim `docs/` (architecture, ISA, programming guide, verification, results, AI usage).
-4. Submit through the Jane Street form when it is posted (deadline 2027-01-18; RTL freeze 2027-01-08).
-
-## Status at a glance (2026-11-17)
-- Phases 0–5 are done locally; see the final report above for what remains in CI.
+1. Once `gds`, `precheck` and `gl_test` are green, merge `phase0-setup` into `main`.
+2. Each push runs `gds`; consider whether doc-only pushes should skip it.
+3. Submit through the Jane Street form when it is posted (deadline 2027-01-18; RTL freeze 2027-01-08).
 
 ## Phase 0: Setup and spec
 - [x] Repo from `ttihp-verilog-template`; OSS CAD Suite 2026-11-16 in `~/tools/oss-cad-suite`
@@ -63,19 +66,20 @@ anonymous API rate limit; fixed by passing `GITHUB_TOKEN`.) `gds` for the full d
 ## Phase 1: Executable spec and first silicon path
 - [x] `sw/bitweaver`: register map, assembler/disassembler, loader and load-image builder, cycle-accurate ISS,
       protocol host helpers. 74 pytest tests.
-- [x] RTL: host SPI, IMEM, 4 engines with FIFO, clock divider, BAU; top level with pin merge, synchronizers, glitch
+- [x] RTL: host SPI, IMEM, engines with FIFO, clock divider, BAU (4 engines, cut to 2 on 2026-11-19); top level with pin merge, synchronizers, glitch
       filters, open drain, timestamp, IRQs. Verilator `-Wall` clean.
 - [x] Lock-step cocotb testbench: every test compares all outputs with the ISS on every cycle.
 - [x] UART TX/RX against `cocotbext-uart`.
-- [ ] Full GDS + precheck + GL test green on the full design (run 44085398579 in progress)
+- [ ] Full GDS + precheck + GL test green: four engines did not route (3 runs cancelled at 6 h); two-engine run
+      of 297df42 pending
 
 ## Phase 2: Full cluster and core protocols
-- [x] 4 engines, FIFO join and chaining, IRQ flags, open drain, WAIT timeout, timestamp, BAU
+- [x] Engines, FIFO join and chaining, IRQ flags, open drain, WAIT timeout, timestamp, BAU
 - [x] UART 9600–921600 baud, 8N1/8E1, framing errors, full duplex
 - [x] SPI controller modes 0–3 (up to 7.5 MHz), SPI target mode 0 (up to ~3 MHz)
 - [x] I2C controller 100 kHz / 400 kHz with repeated START, ACK/NACK, clock stretching, stretch timeout; I2C target
       (two engines) with clock stretching
-- [x] Concurrency: UART TX + UART RX + SPI + I2C on four engines at once
+- [x] Concurrency: UART TX + UART RX + SPI + I2C on four engines at once (now SPI + I2C on two)
 
 ## Phase 3: Verification depth and timing closure
 - [x] Constrained-random lock-step in Verilator (`verif/lockstep`): 100M cycles over 1000 seeds, no mismatch;
@@ -98,10 +102,11 @@ anonymous API rate limit; fixed by passing `GITHUB_TOKEN`.) `gds` for the full d
 ## Decisions
 - **Reset:** asynchronous assert, synchronous release through a 2-FF synchronizer. IHP has no flip-flop without a
   reset pin, so async reset costs no area. The ISS models the two release cycles.
-- **Area guardrail:** the full design maps to 27.4K IHP cells (about 39 % of the 8x4 core). That is over the PLAN's
-  24K-cell guardrail, but the guardrail exists to leave at least 25 % headroom for CTS and routing, and 39 %
-  utilisation leaves far more. No feature was cut for area. If routing or timing fails, the first cut is the
-  IMEM read ports (latch-based IMEM or 32 entries), as PLAN orders.
+- **Area guardrail (revised 2026-11-19):** the four-engine design (27.4K cells, 39 % by cell area, 50 % placement
+  utilisation) passed the cell-count reasoning but did not route: routing, not area, was the binding constraint,
+  because the design is mostly wide multiplexers and a TT tile only has Metal2–Metal4 for signals. Cut to two
+  engines and removed the IMEM host read port (15.3K cells). The earlier reasoning that 39 % utilisation "leaves
+  far more than 25 % headroom" was wrong for this kind of logic.
 - **Includes:** RTL files `` `include "bw_defs.vh" ``; LibreLane's linter and Yosys resolve includes relative to
   the including file, so local lint needs `--relative-includes`.
 - **Instruction fetch:** IR is loaded at the end of each cycle from memory[next PC] (write-first), so there is no
