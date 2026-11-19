@@ -20,7 +20,8 @@ CHIP_ID = 0xB717
 CHIP_VERSION = 0x0100
 SPI_ID_BYTE = 0xB7  # first byte shifted out on MISO after CS_N falls
 
-NUM_SM = 4
+NUM_SM = 2  # four engines did not route in an 8x4 tile; see PROGRESS.md
+_SMB = max(1, (NUM_SM - 1).bit_length())  # bits needed to name an engine
 IMEM_DEPTH = 64
 NUM_PINS = 19  # PIN0..PIN18
 NUM_IRQ = 8
@@ -135,16 +136,16 @@ GLOBAL_REGS = [
     Reg("VERSION", 0x01, "RO", "Design version.",
         [Field("VERSION", 0, 16, "Major in the high byte, minor in the low byte.", CHIP_VERSION)]),
     Reg("CTRL", 0x02, "RW", "Engine enables and restart strobes.", [
-        Field("EN", 0, 4, "Engine enable, one bit per engine. All engines enabled by one write start on the "
+        Field("EN", 0, NUM_SM, "Engine enable, one bit per engine. All engines enabled by one write start on the "
                           "same clock cycle."),
-        Field("RESTART", 4, 4, "Write 1 to restart an engine: clears its scratch and shift registers, "
+        Field("RESTART", 4, NUM_SM, "Write 1 to restart an engine: clears its scratch and shift registers, "
                                "counters, delay, BAU state and clock-divider phase, and sets PC to ORG. "
                                "Reads 0."),
     ]),
     Reg("INT_STAT", 0x03, "RO", "Interrupt sources. HOST_IRQ is high while (INT_STAT & INT_EN) != 0.", [
         Field("IRQ", 0, 8, "The eight IRQ flags."),
-        Field("RXNE", 8, 4, "RX FIFO not empty, one bit per engine."),
-        Field("TXNF", 12, 4, "TX FIFO not full, one bit per engine."),
+        Field("RXNE", 8, NUM_SM, "RX FIFO not empty, one bit per engine."),
+        Field("TXNF", 12, NUM_SM, "TX FIFO not full, one bit per engine."),
     ]),
     Reg("INT_EN", 0x04, "RW", "Interrupt enable mask, same layout as INT_STAT.",
         [Field("EN", 0, 16, "1 = the source drives HOST_IRQ.")]),
@@ -153,16 +154,16 @@ GLOBAL_REGS = [
     Reg("IRQ_FORCE", 0x06, "WO", "Set IRQ flags from the host.",
         [Field("FLAGS", 0, 8, "Write 1 to set a flag. Reads 0.")]),
     Reg("FSTAT", 0x07, "RO", "FIFO status, one bit per engine in each field.", [
-        Field("TXFULL", 0, 4, "TX FIFO full."),
-        Field("TXEMPTY", 4, 4, "TX FIFO empty."),
-        Field("RXFULL", 8, 4, "RX FIFO full."),
-        Field("RXEMPTY", 12, 4, "RX FIFO empty."),
+        Field("TXFULL", 0, NUM_SM, "TX FIFO full."),
+        Field("TXEMPTY", 4, NUM_SM, "TX FIFO empty."),
+        Field("RXFULL", 8, NUM_SM, "RX FIFO full."),
+        Field("RXEMPTY", 12, NUM_SM, "RX FIFO empty."),
     ]),
     Reg("FDEBUG", 0x08, "W1C", "Sticky FIFO error flags, one bit per engine in each field.", [
-        Field("TXOVER", 0, 4, "The host pushed to a full TX FIFO; the word was dropped."),
-        Field("RXUNDER", 4, 4, "The host read an empty RX FIFO; it read 0."),
-        Field("TXSTALL", 8, 4, "The engine stalled on (or a non-blocking PULL found) an empty TX FIFO."),
-        Field("RXSTALL", 12, 4, "The engine stalled on (or a non-blocking PUSH dropped data at) a full RX "
+        Field("TXOVER", 0, NUM_SM, "The host pushed to a full TX FIFO; the word was dropped."),
+        Field("RXUNDER", 4, NUM_SM, "The host read an empty RX FIFO; it read 0."),
+        Field("TXSTALL", 8, NUM_SM, "The engine stalled on (or a non-blocking PULL found) an empty TX FIFO."),
+        Field("RXSTALL", 12, NUM_SM, "The engine stalled on (or a non-blocking PUSH dropped data at) a full RX "
                                 "FIFO."),
     ]),
     Reg("TS_PRESCALE", 0x09, "RW", "Timestamp prescaler.",
@@ -229,7 +230,7 @@ SM_REGS = [
         Field("JOIN_TX", 0, 1, "1 = TX FIFO is 8 deep, RX FIFO disabled."),
         Field("JOIN_RX", 1, 1, "1 = RX FIFO is 8 deep, TX FIFO disabled (ignored if JOIN_TX is set)."),
         Field("CHAIN_EN", 2, 1, "1 = this engine's TX FIFO is fed from another engine's RX FIFO."),
-        Field("CHAIN_SRC", 3, 2, "Engine whose RX FIFO feeds this TX FIFO."),
+        Field("CHAIN_SRC", 3, _SMB, "Engine whose RX FIFO feeds this TX FIFO."),
     ]),
     Reg("TMO", 0x8, "RW", "WAIT timeout.",
         [Field("TICKS", 0, 16, "A timed WAIT gives up after TICKS+1 failed checks.")]),
@@ -297,7 +298,9 @@ def gen_vh() -> str:
             f"`define BW_CHIP_VERSION 16'h{CHIP_VERSION:04X}",
             f"`define BW_SPI_ID_BYTE  8'h{SPI_ID_BYTE:02X}",
             f"`define BW_SM_BASE      8'h{SM_BASE:02X}",
-            f"`define BW_IMEM_BASE    8'h{IMEM_BASE:02X}", ""]
+            f"`define BW_IMEM_BASE    8'h{IMEM_BASE:02X}",
+            f"`define BW_NUM_SM       {NUM_SM}",
+            f"`define BW_SMB          {_SMB}", ""]
     out.append("// Global register addresses")
     for r in GLOBAL_REGS:
         out.append(f"`define BW_A_{r.name:<12} 8'h{r.addr:02X}")
@@ -368,7 +371,7 @@ def gen_md() -> str:
         base = SM_BASE + n * SM_STRIDE
         out.append(f"| `0x{base:02X}`–`0x{base + SM_STRIDE - 1:02X}` | Engine SM{n} registers |")
     out += [f"| `0x{IMEM_BASE:02X}`–`0x{IMEM_BASE + IMEM_DEPTH - 1:02X}` | Instruction memory, "
-            f"{IMEM_DEPTH} words (read/write) |", "",
+            f"{IMEM_DEPTH} words (write only; reads return 0) |", "",
             "Unlisted addresses read 0 and ignore writes.", "", "## Global registers", ""]
     out += _reg_table(GLOBAL_REGS, lambda r: f"`0x{r.addr:02X}`")
     out += ["", "## Per-engine registers", "",

@@ -7,6 +7,8 @@
 `define BW_SPI_ID_BYTE  8'hB7
 `define BW_SM_BASE      8'h20
 `define BW_IMEM_BASE    8'h80
+`define BW_NUM_SM       2
+`define BW_SMB          1
 
 // Global register addresses
 `define BW_A_ID           8'h00
@@ -48,19 +50,19 @@
 `define BW_O_STAT         4'hD
 
 // Fields as msb:lsb ranges
-`define BW_F_CTRL_EN                3:0
-`define BW_F_CTRL_RESTART           7:4
+`define BW_F_CTRL_EN                1:0
+`define BW_F_CTRL_RESTART           5:4
 `define BW_F_INT_STAT_IRQ           7:0
-`define BW_F_INT_STAT_RXNE          11:8
-`define BW_F_INT_STAT_TXNF          15:12
-`define BW_F_FSTAT_TXFULL           3:0
-`define BW_F_FSTAT_TXEMPTY          7:4
-`define BW_F_FSTAT_RXFULL           11:8
-`define BW_F_FSTAT_RXEMPTY          15:12
-`define BW_F_FDEBUG_TXOVER          3:0
-`define BW_F_FDEBUG_RXUNDER         7:4
-`define BW_F_FDEBUG_TXSTALL         11:8
-`define BW_F_FDEBUG_RXSTALL         15:12
+`define BW_F_INT_STAT_RXNE          9:8
+`define BW_F_INT_STAT_TXNF          13:12
+`define BW_F_FSTAT_TXFULL           1:0
+`define BW_F_FSTAT_TXEMPTY          5:4
+`define BW_F_FSTAT_RXFULL           9:8
+`define BW_F_FSTAT_RXEMPTY          13:12
+`define BW_F_FDEBUG_TXOVER          1:0
+`define BW_F_FDEBUG_RXUNDER         5:4
+`define BW_F_FDEBUG_TXSTALL         9:8
+`define BW_F_FDEBUG_RXSTALL         13:12
 `define BW_F_WRAP_BOTTOM            5:0
 `define BW_F_WRAP_TOP               13:8
 `define BW_F_ORG_ORG                5:0
@@ -83,7 +85,7 @@
 `define BW_F_FIFOCTRL_JOIN_TX       0:0
 `define BW_F_FIFOCTRL_JOIN_RX       1:1
 `define BW_F_FIFOCTRL_CHAIN_EN      2:2
-`define BW_F_FIFOCTRL_CHAIN_SRC     4:3
+`define BW_F_FIFOCTRL_CHAIN_SRC     3:3
 `define BW_F_BAU_CFG_STUFF_N        2:0
 `define BW_F_BAU_CFG_STUFF_ANY      3:3
 `define BW_F_STAT_PC                5:0

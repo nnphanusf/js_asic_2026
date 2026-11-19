@@ -126,6 +126,12 @@ class Bitweaver:
     def exec(self, sm, word):
         self.write(SM_BASE + 0x10 * sm + 0xC, [word])
 
+    def read_imem(self, addr, sm=0):
+        """Read an instruction-memory word through a disabled engine (no host read port exists)."""
+        self.write(SM_BASE + 0x10 * sm + 0x3, [addr & 0x20])  # ORG (JMP_PIN cleared)
+        self.exec(sm, addr & 31)                               # JMP addr (always)
+        return self.read(SM_BASE + 0x10 * sm + 0xC)[0]         # EXEC reads the instruction register
+
     def irq(self):
         return self.read(IRQ)[0]
 

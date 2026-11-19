@@ -52,9 +52,9 @@ async def test_usb_rx(dut):
     tb = TB(dut)
     await tb.start()
     lines = UsbLines(dut)
-    await tb.load(load_program("usb_se0"), 2)
+    await tb.load(load_program("usb_se0"), 0)
     await tb.load(load_program("usb_rx"), 1, clkdiv=4)
-    await tb.enable(0b110)
+    await tb.enable(0b11)
     for p in PACKETS:
         await lines.send(packet_bits(**p))
         await Timer(3, "us")

@@ -306,13 +306,13 @@ async def test_irq(dut):
     tb = TB(dut)
     await tb.start()
     await tb.load("irq wait 1 rel\n set x, 7\nh: jmp h", 1)
-    await tb.load("wait 1 irq 2\n set y, 3\n irq 5\n irq clear 5\n irq 6\nh: jmp h", 2)
-    await tb.enable(0b010)
-    assert await tb.read1(R.addr("IRQ")) == 0b100
-    await tb.enable(0b100)
+    await tb.load("wait 1 irq 2\n set y, 3\n irq 5\n irq clear 5\n irq 6\nh: jmp h", 0)
+    await tb.enable(0b10)
+    assert await tb.read1(R.addr("IRQ")) == 0b100  # SM1's relative flag 1 is flag 2
+    await tb.enable(0b01)
     await tb.cycles_(10)
     assert await tb.read1(R.addr("IRQ")) == 0b1000000
-    assert await tb.reg(1, "x") == 7 and await tb.reg(2, "y") == 3
+    assert await tb.reg(1, "x") == 7 and await tb.reg(0, "y") == 3
     # Host force / clear and the interrupt pin.
     await tb.load("wait 1 irq 4\n irq 0\nh: jmp h", 0, origin=30)
     await tb.enable(1)
@@ -398,12 +398,12 @@ async def test_pin_priority_open_drain_filter(dut):
     await tb.start()
     await tb.set_pins(0, 0x7FFE0)
     await tb.load(".pins set=5 set_count=2\n.wrap_target\n set pins, 1\n.wrap", 0)
-    await tb.load(".pins set=6 set_count=2\n.wrap_target\n set pins, 0\n.wrap", 3)
-    await tb.enable(0b1001)
+    await tb.load(".pins set=6 set_count=2\n.wrap_target\n set pins, 0\n.wrap", 1)
+    await tb.enable(0b11)
     assert (tb.pads() >> 5) & 7 == 0b001
     await tb.write(R.addr("PIN_OUT_LO"), [0xFFE0])
     assert (tb.pads() >> 5) & 0x3F == 0b111001
-    await tb.disable(0b1001)
+    await tb.disable(0b11)
     # Open drain: level 1 releases the pad, level 0 drives it low.
     await tb.set_open_drain(1 << 11)
     await tb.set_pins(0x7FFE0, 1 << 11)
@@ -432,7 +432,7 @@ async def test_fifo_join_chain_and_host_errors(dut):
     tb = TB(dut)
     await tb.start()
     await tb.push(0, [1, 2, 3, 4, 5])
-    assert await tb.read1(R.addr("FSTAT")) == 0xF0E1
+    assert await tb.read1(R.addr("FSTAT")) == 0x3021
     assert await tb.read1(R.addr("FDEBUG")) == 0x0001
     await tb.write(R.addr("FDEBUG"), [0x0001])
     assert await tb.pop(1) == [0]
@@ -444,12 +444,12 @@ async def test_fifo_join_chain_and_host_errors(dut):
     await tb.enable(0b10)
     await tb.cycles_(60)
     assert await tb.rx_level(1) == 8
-    await tb.load(".wrap_target\n pull\n mov isr, osr\n push\n.wrap", 3)
-    await tb.load(".fifo chain=3\n.wrap_target\n pull\n mov isr, !osr\n push\n.wrap", 2)
-    await tb.enable(0b1100)
-    await tb.push(3, [0x00FF, 0x1234])
+    await tb.load(".wrap_target\n pull\n mov isr, osr\n push\n.wrap", 1)
+    await tb.load(".fifo chain=1\n.wrap_target\n pull\n mov isr, !osr\n push\n.wrap", 0)
+    await tb.enable(0b11)
+    await tb.push(1, [0x00FF, 0x1234])
     await tb.cycles_(30)
-    assert await tb.pop(2, 2) == [0xFF00, 0xEDCB]
+    assert await tb.pop(0, 2) == [0xFF00, 0xEDCB]
     tb.done()
 
 

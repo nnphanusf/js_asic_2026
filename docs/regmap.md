@@ -10,9 +10,7 @@ Access types: RO read only, RW read/write, W1C write 1 to clear, WO write only.
 | `0x00`–`0x1F` | Global registers |
 | `0x20`–`0x2F` | Engine SM0 registers |
 | `0x30`–`0x3F` | Engine SM1 registers |
-| `0x40`–`0x4F` | Engine SM2 registers |
-| `0x50`–`0x5F` | Engine SM3 registers |
-| `0x80`–`0xBF` | Instruction memory, 64 words (read/write) |
+| `0x80`–`0xBF` | Instruction memory, 64 words (write only; reads return 0) |
 
 Unlisted addresses read 0 and ignore writes.
 
@@ -22,22 +20,22 @@ Unlisted addresses read 0 and ignore writes.
 |---|---|---|---|---|---|---|
 | `0x00` | `ID` | RO | 15:0 | `ID` | 0xB717 | Chip identifier. Reads 0xB717. |
 | `0x01` | `VERSION` | RO | 15:0 | `VERSION` | 0x100 | Design version. Major in the high byte, minor in the low byte. |
-| `0x02` | `CTRL` | RW | 3:0 | `EN` | 0 | **Engine enables and restart strobes.** Engine enable, one bit per engine. All engines enabled by one write start on the same clock cycle. |
-| | | | 7:4 | `RESTART` | 0 | Write 1 to restart an engine: clears its scratch and shift registers, counters, delay, BAU state and clock-divider phase, and sets PC to ORG. Reads 0. |
+| `0x02` | `CTRL` | RW | 1:0 | `EN` | 0 | **Engine enables and restart strobes.** Engine enable, one bit per engine. All engines enabled by one write start on the same clock cycle. |
+| | | | 5:4 | `RESTART` | 0 | Write 1 to restart an engine: clears its scratch and shift registers, counters, delay, BAU state and clock-divider phase, and sets PC to ORG. Reads 0. |
 | `0x03` | `INT_STAT` | RO | 7:0 | `IRQ` | 0 | **Interrupt sources. HOST_IRQ is high while (INT_STAT & INT_EN) != 0.** The eight IRQ flags. |
-| | | | 11:8 | `RXNE` | 0 | RX FIFO not empty, one bit per engine. |
-| | | | 15:12 | `TXNF` | 0 | TX FIFO not full, one bit per engine. |
+| | | | 9:8 | `RXNE` | 0 | RX FIFO not empty, one bit per engine. |
+| | | | 13:12 | `TXNF` | 0 | TX FIFO not full, one bit per engine. |
 | `0x04` | `INT_EN` | RW | 15:0 | `EN` | 0 | Interrupt enable mask, same layout as INT_STAT. 1 = the source drives HOST_IRQ. |
 | `0x05` | `IRQ` | W1C | 7:0 | `FLAGS` | 0 | IRQ flags shared by the engines. Read the flags; write 1 to clear a flag. |
 | `0x06` | `IRQ_FORCE` | WO | 7:0 | `FLAGS` | 0 | Set IRQ flags from the host. Write 1 to set a flag. Reads 0. |
-| `0x07` | `FSTAT` | RO | 3:0 | `TXFULL` | 0 | **FIFO status, one bit per engine in each field.** TX FIFO full. |
-| | | | 7:4 | `TXEMPTY` | 0 | TX FIFO empty. |
-| | | | 11:8 | `RXFULL` | 0 | RX FIFO full. |
-| | | | 15:12 | `RXEMPTY` | 0 | RX FIFO empty. |
-| `0x08` | `FDEBUG` | W1C | 3:0 | `TXOVER` | 0 | **Sticky FIFO error flags, one bit per engine in each field.** The host pushed to a full TX FIFO; the word was dropped. |
-| | | | 7:4 | `RXUNDER` | 0 | The host read an empty RX FIFO; it read 0. |
-| | | | 11:8 | `TXSTALL` | 0 | The engine stalled on (or a non-blocking PULL found) an empty TX FIFO. |
-| | | | 15:12 | `RXSTALL` | 0 | The engine stalled on (or a non-blocking PUSH dropped data at) a full RX FIFO. |
+| `0x07` | `FSTAT` | RO | 1:0 | `TXFULL` | 0 | **FIFO status, one bit per engine in each field.** TX FIFO full. |
+| | | | 5:4 | `TXEMPTY` | 0 | TX FIFO empty. |
+| | | | 9:8 | `RXFULL` | 0 | RX FIFO full. |
+| | | | 13:12 | `RXEMPTY` | 0 | RX FIFO empty. |
+| `0x08` | `FDEBUG` | W1C | 1:0 | `TXOVER` | 0 | **Sticky FIFO error flags, one bit per engine in each field.** The host pushed to a full TX FIFO; the word was dropped. |
+| | | | 5:4 | `RXUNDER` | 0 | The host read an empty RX FIFO; it read 0. |
+| | | | 9:8 | `TXSTALL` | 0 | The engine stalled on (or a non-blocking PULL found) an empty TX FIFO. |
+| | | | 13:12 | `RXSTALL` | 0 | The engine stalled on (or a non-blocking PUSH dropped data at) a full RX FIFO. |
 | `0x09` | `TS_PRESCALE` | RW | 7:0 | `DIV` | 0 | Timestamp prescaler. The timestamp counter advances every DIV+1 clock cycles. |
 | `0x0A` | `TIME` | RW | 15:0 | `TIME` | 0 | Free-running 16-bit timestamp counter. Read the counter; write to set it (also clears the prescaler phase). |
 | `0x10` | `PIN_IN_LO` | RO | 15:0 | `PINS` | 0 | Pin inputs after the synchronizer and glitch filter. Input level for PIN15..PIN0, one bit per pin |
@@ -81,7 +79,7 @@ Engine *n* has its registers at `0x20 + 0x10 * n + offset`.
 | `+0x7` | `FIFOCTRL` | RW | 0 | `JOIN_TX` | 0 | **FIFO configuration. Any write clears both FIFOs of this engine.** 1 = TX FIFO is 8 deep, RX FIFO disabled. |
 | | | | 1 | `JOIN_RX` | 0 | 1 = RX FIFO is 8 deep, TX FIFO disabled (ignored if JOIN_TX is set). |
 | | | | 2 | `CHAIN_EN` | 0 | 1 = this engine's TX FIFO is fed from another engine's RX FIFO. |
-| | | | 4:3 | `CHAIN_SRC` | 0 | Engine whose RX FIFO feeds this TX FIFO. |
+| | | | 3 | `CHAIN_SRC` | 0 | Engine whose RX FIFO feeds this TX FIFO. |
 | `+0x8` | `TMO` | RW | 15:0 | `TICKS` | 0 | WAIT timeout. A timed WAIT gives up after TICKS+1 failed checks. |
 | `+0x9` | `BAU_POLY` | RW | 15:0 | `POLY` | 0 | BAU CRC polynomial. Reflected (right-shifting) polynomial; the width is implied by its top set bit. |
 | `+0xA` | `BAU_CFG` | RW | 2:0 | `STUFF_N` | 0 | **BAU bit-stuffing configuration.** A stuff bit follows every run of STUFF_N equal bits (0 disables). |

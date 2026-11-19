@@ -24,11 +24,15 @@ def test_program_assembles(path):
         assert 0 <= p.wrap_target <= p.wrap < len(p.code)
 
 
-def test_total_size_of_concurrency_demo_fits():
-    names = {"uart_tx": "uart", "uart_rx": "uart", "spi_ctrl_cpha0": "spi", "i2c_ctrl": "i2c"}
-    total = 0
-    for name, f in names.items():
-        total += len(assemble_file(os.path.join(HERE, "..", "programs", f + ".bw"))[name].code)
+@pytest.mark.parametrize("pair", [("spi_ctrl_cpha0", "spi", "i2c_ctrl", "i2c"),
+                                  ("i2c_cond", "i2c", "i2c_target", "i2c"),
+                                  ("usb_se0", "usb", "usb_rx", "usb"),
+                                  ("can_tx", "can", "can_rx", "can")])
+def test_two_engine_pairs_fit_in_memory(pair):
+    """Every pair of programs the tests run side by side fits in the 64-word instruction memory."""
+    a, fa, b, fb = pair
+    total = sum(len(assemble_file(os.path.join(HERE, "..", "programs", f + ".bw"))[n].code)
+                for n, f in ((a, fa), (b, fb)))
     assert total <= 64
 
 

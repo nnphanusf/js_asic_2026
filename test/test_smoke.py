@@ -32,7 +32,7 @@ async def test_id_version_and_status_byte(dut):
     tb = TB(dut)
     await tb.start()
     assert await tb.read(R.addr("ID"), 2, inc=True) == [R.CHIP_ID, R.CHIP_VERSION]
-    assert tb.first_bytes == (R.SPI_ID_BYTE, 0x0F)
+    assert tb.first_bytes == (R.SPI_ID_BYTE, 0x03)  # both TX FIFOs not full, both RX FIFOs empty
     tb.done()
 
 
@@ -59,11 +59,14 @@ async def test_register_readback(dut):
 
 @cocotb.test()
 async def test_imem_write_and_readback(dut):
+    """The instruction memory is write only from the host; words are read back through an engine."""
     tb = TB(dut)
     await tb.start()
     words = [(i * 0x9E37 + 0x1234) & 0xFFFF for i in range(R.IMEM_DEPTH)]
     await tb.write(R.IMEM_BASE, words, inc=True)
-    assert await tb.read(R.IMEM_BASE, R.IMEM_DEPTH, inc=True) == words
+    assert await tb.read(R.IMEM_BASE, 4, inc=True) == [0, 0, 0, 0]
+    for a in list(range(0, R.IMEM_DEPTH, 7)) + [31, 32, 63]:
+        assert await tb.read_imem(a, sm=a % R.NUM_SM) == words[a], a
     tb.done()
 
 

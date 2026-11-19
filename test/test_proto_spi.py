@@ -66,20 +66,20 @@ async def test_spi_target_mode0(dut):
     """The target program answers cocotbext-spi's SpiMaster at 1 MHz and 2.5 MHz."""
     tb = TB(dut)
     await tb.start()
-    await tb.load(load_program("spi_target", file="spi"), 2)
-    await tb.enable(1 << 2)
+    await tb.load(load_program("spi_target", file="spi"), 1)
+    await tb.enable(1 << 1)
     for freq in (1e6, 2.5e6):
         bus = SpiBus(entity=dut, sclk_name=f"ext{SCK}", mosi_name=f"ext{MOSI}", miso_name=f"pad{MISO}",
                      cs_name=f"ext{CS}")
         master = SpiMaster(bus, SpiConfig(sclk_freq=freq, cpol=False, cpha=False, msb_first=True))
         for sent, replies, expect in (([0x9F, 0x00, 0xFF, 0x42], [0xC3, 0x5A, 0x01], [0xC3, 0x5A, 0x01, 0xFF]),
                                       ([0x24, 0x81, 0x7E, 0x55], [0x11, 0x22, 0x33, 0x44], [0x11, 0x22, 0x33, 0x44])):
-            await tb.push(2, replies)
+            await tb.push(1, replies)
             await master.write(sent, burst=True)
             got = list(await master.read(len(sent)))
             assert got == expect, (freq, got)
-            await tb.wait_rx(2, 4, timeout_cycles=5000)
-            rx = await tb.pop(2, 4)
+            await tb.wait_rx(1, 4, timeout_cycles=5000)
+            rx = await tb.pop(1, 4)
             assert rx == sent, (freq, rx)
         master._run_coroutine_obj.cancel()
         master._SpiClock._run_coroutine_obj.cancel()

@@ -198,7 +198,7 @@ print(bw.pop(0))
   `join_rx`) for 8 words of buffering. A receiver on someone else's clock should never stall: use
   `push noblock` (data is dropped and `FDEBUG.RXSTALL` set) rather than blocking.
 * **Packing several programs.** Programs are position independent; `Driver.load` places them one after another,
-  and four engines can run four programs out of the 64 words.
+  and both engines run their programs out of the 64 words.
 
 ## Pitfalls
 

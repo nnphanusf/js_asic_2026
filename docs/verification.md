@@ -72,7 +72,7 @@ of the wire* that knows nothing about Bitweaver:
 | CAN 2.0A | `can.bw` | CAN node with its own encoder, stuffing and CRC15, wired-AND bus | TX and RX at 500 kbit/s and 1 Mbit/s, worst-case stuffing, ACK and missing ACK |
 | USB low speed | `usb.bw` | USB 2.0 line model with spec-literal CRC5/CRC16 | DATA0/1 (incl. all-0xFF stuffing, zero length), ACK, IN, SETUP; NRZI, stuffing, EOP, bus release |
 | 1-Wire | `onewire.bw` | Maxim 1-Wire device (ROM, scratchpad) | reset/presence, ROM with CRC8, write/read, absent device timeout |
-| Concurrency | UART TX + UART RX + SPI + I2C | the models above, simultaneously | four protocols on four engines at once, one shared host port |
+| Concurrency | SPI controller + I2C controller (400 kHz) | the models above, simultaneously | two protocols on both engines at once, one shared host port |
 
 ## 4. Formal verification
 

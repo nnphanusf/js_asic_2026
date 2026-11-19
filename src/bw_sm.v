@@ -2,7 +2,7 @@
  * Copyright (c) 2026 nnphanusf
  * SPDX-License-Identifier: Apache-2.0
  *
- * Bitweaver engine (state machine): one of four identical programmable bit-banging cores.
+ * Bitweaver engine (state machine): one of two identical programmable bit-banging cores.
  *
  * An engine executes one 16-bit instruction per tick of its clock divider. It owns
  *   - its configuration registers (a 16-address window of the host register map),
@@ -57,7 +57,7 @@ module bw_sm (
     input  wire        chain_push,  // push chain_wdata to the TX FIFO
     input  wire [15:0] chain_wdata,
     output wire        chain_en,
-    output wire [1:0]  chain_src,
+    output wire [`BW_SMB-1:0] chain_src,
     // sticky-flag events
     output wire        ev_txover,
     output wire        ev_txstall,
@@ -75,7 +75,7 @@ module bw_sm (
   reg [3:0]  r_push_thresh, r_pull_thresh;
   reg        r_autopush, r_autopull, r_in_right, r_out_right, r_side_pindir;
   reg        r_join_tx, r_join_rx, r_chain_en;
-  reg [1:0]  r_chain_src;
+  reg [`BW_SMB-1:0] r_chain_src;
   reg [15:0] r_tmo, r_poly;
   reg [2:0]  r_stuff_n;
   reg        r_stuff_any;
@@ -112,7 +112,7 @@ module bw_sm (
       r_join_tx     <= 1'b0;
       r_join_rx     <= 1'b0;
       r_chain_en    <= 1'b0;
-      r_chain_src   <= 2'd0;
+      r_chain_src   <= {`BW_SMB{1'b0}};
       r_tmo         <= 16'd0;
       r_poly        <= 16'd0;
       r_stuff_n     <= 3'd0;
@@ -725,7 +725,7 @@ module bw_sm (
       `BW_O_PINCTRL1:    cfg_rdata = {r_side_en, r_side_count, r_set_count, r_out_count, r_side_base};
       `BW_O_SHIFTCTRL:   cfg_rdata = {3'd0, r_side_pindir, r_out_right, r_in_right, r_autopull, r_autopush,
                                       r_pull_thresh, r_push_thresh};
-      `BW_O_FIFOCTRL:    cfg_rdata = {11'd0, r_chain_src, r_chain_en, r_join_rx, r_join_tx};
+      `BW_O_FIFOCTRL:    cfg_rdata = {{(13-`BW_SMB){1'b0}}, r_chain_src, r_chain_en, r_join_rx, r_join_tx};
       `BW_O_TMO:         cfg_rdata = r_tmo;
       `BW_O_BAU_POLY:    cfg_rdata = r_poly;
       `BW_O_BAU_CFG:     cfg_rdata = {12'd0, r_stuff_any, r_stuff_n};

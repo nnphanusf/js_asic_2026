@@ -17,6 +17,7 @@ from . import regmap as R
 
 MASK16 = 0xFFFF
 _SM_OFF = {r.addr: r.name for r in R.SM_REGS}
+_SM_MASK = (1 << R.NUM_SM) - 1
 _PIN_OUT_LO_MASK = R.PIN_OUT_MASK & 0xFFFF
 _PIN_OD_LO_MASK = R.PIN_OD_MASK & 0xFFFF
 _PIN_FILT_LO_MASK = R.PIN_FILT_MASK & 0xFFFF
@@ -65,7 +66,7 @@ class SM:
         self.join_tx = f & 1
         self.join_rx = (f >> 1) & 1 if not self.join_tx else 0
         self.chain_en = (f >> 2) & 1
-        self.chain_src = (f >> 3) & 3
+        self.chain_src = (f >> 3) & ((1 << R.fld("FIFOCTRL", "CHAIN_SRC").width) - 1)
         self.tx_depth = 8 if self.join_tx else (0 if self.join_rx else R.FIFO_DEPTH)
         self.rx_depth = 0 if self.join_tx else (8 if self.join_rx else R.FIFO_DEPTH)
         self.tmo = c["TMO"]
@@ -181,7 +182,7 @@ class Bitweaver:
         """Value a host read of `addr` returns, without side effects."""
         addr &= 0xFF
         if addr >= R.IMEM_BASE:
-            return self.imem[addr & 63] if addr < R.IMEM_BASE + R.IMEM_DEPTH else 0
+            return 0  # instruction memory is write only from the host
         if addr >= R.SM_BASE:
             k = (addr - R.SM_BASE) >> 4
             if k >= R.NUM_SM:
@@ -352,7 +353,7 @@ class Bitweaver:
                     elif name == "FIFOCTRL":
                         fifo_clr = k
             elif wa == 0x02:
-                restart = (wd >> 4) & 15
+                restart = (wd >> 4) & _SM_MASK
         host_pop = None
         rxunder = 0
         if rd_pop:
@@ -477,7 +478,7 @@ class Bitweaver:
         time_wr = False
         if wr_en and wa < R.SM_BASE:
             if wa == 0x02:
-                self.en = wd & 15
+                self.en = wd & _SM_MASK
             elif wa == 0x04:
                 self.int_en = wd
             elif wa == 0x05:

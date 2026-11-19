@@ -1,7 +1,7 @@
 # Bitweaver architecture
 
 Bitweaver is a programmable protocol emulator for Tiny Tapeout (IHP SG13CMOS5L, 8x4 tiles, 60 MHz). It has no
-UART, SPI or I2C hardware. Four small engines execute bit-banging programs with exact cycle timing, and a few
+UART, SPI or I2C hardware. Two small engines execute bit-banging programs with exact cycle timing, and a few
 generic helpers (open-drain pads, a timed WAIT, a bit-level assist unit, a timestamp, FIFO chaining) make protocols
 that would otherwise need dedicated hardware possible in firmware.
 
@@ -9,7 +9,7 @@ The specification of the instruction set is [isa.md](isa.md), the register map i
 from `sw/bitweaver/regmap.py`), and [programming_guide.md](programming_guide.md) walks through writing a new
 protocol.
 
-![Four engines running WS2812, UART, SPI and JTAG at the same time](images/four_protocols.svg)
+![Both engines running SPI and JTAG at the same time](images/two_protocols.svg)
 
 ## Block diagram
 
@@ -24,14 +24,12 @@ flowchart LR
     sync["2-FF synchronizers<br/>+ glitch filters"]
     spi["Host SPI target<br/>bw_host_spi"]
     regs["Global registers<br/>CTRL, IRQ, pins, pads, TIME"]
-    imem["Instruction memory<br/>64 x 16, 4+1 read ports<br/>bw_imem"]
+    imem["Instruction memory<br/>64 x 16, one read port per engine<br/>bw_imem"]
     subgraph cluster [Engine cluster]
         sm0["SM0<br/>bw_sm"]
-        sm1["SM1"]
-        sm2["SM2"]
-        sm3["SM3"]
+        sm1["SM1<br/>bw_sm"]
     end
-    merge["Pin merge<br/>(SM3 > SM2 > SM1 > SM0 > host)<br/>open-drain logic"]
+    merge["Pin merge<br/>(SM1 > SM0 > host)<br/>open-drain logic"]
     ui --> sync
     uio --> sync
     host --> sync --> spi
@@ -76,7 +74,7 @@ cycles, which removes pulses shorter than three clock cycles (50 ns) at the cost
 
 Every output pin has a level bit (`PIN_OUT`) and an enable bit (`PIN_OE`). The host writes them directly; engines
 change them with `OUT`/`MOV`/`SET PINS`/`PINDIRS` and side-set. All writers of a cycle are merged with a fixed
-priority (SM3 > SM2 > SM1 > SM0 > host), so a write never needs a read-modify-write.
+priority (SM1 > SM0 > host), so a write never needs a read-modify-write.
 
 In **open-drain mode** (`PAD_OD`, PIN11..PIN18) the pad's output value is forced to 0 and the level bit only
 controls the enable: level 0 pulls the line low, level 1 releases it. An open-drain pin can never drive high;
@@ -181,16 +179,28 @@ reset pin, so the asynchronous reset costs no area.
 
 ## Area and timing
 
-See [results.md](results.md) for current numbers. The instruction memory (1024 flip-flops and five 64:1 read
-ports, about 12K cells before mapping) is the largest block; each engine is about 4K cells, of which the FIFO is
-about 1K. The whole design maps to about 27K IHP cells, roughly 40 % of the 8x4 core area.
+See [results.md](results.md) for current numbers. The design maps to about 15K IHP cells (231 000 um2, roughly
+30 % of the 8x4 core). Each engine is about 65 000 um2 including its FIFO; the instruction memory (1024
+flip-flops and one 64:1 x 16 read port per engine) is about 75 000 um2.
+
+### Why two engines
+
+The first version had four engines and a fifth, host read-back port on the instruction memory: 27K cells and
+50 % placement utilisation. It did not route. A Tiny Tapeout tile only offers Metal2 to Metal4 for signals, and
+the design is dominated by wide multiplexers (every instruction-memory bit fed five 64:1 trees). Global routing
+overflowed in 20 to 45 % of the routing tiles, and detailed routing still had about 300 000 violations after its
+first pass when GitHub stopped the job at 6 hours. Two engines and three fewer read ports halve the area and
+remove most of the wiring hot spot. Every protocol in `sw/programs` still fits: none needs more than two
+engines.
 
 ## Design decisions
 
 * **PIO-style ISA, extended.** A proven model for bit-banging engines, extended where PIO needs CPU help: timed
   WAIT, BAU, timestamp source, byte-swap MOV, CRC as a MOV/IN operand, open-drain pads.
-* **Shared 64-word instruction memory in flip-flops**, not an SRAM macro: four engines need four read ports every
-  cycle, which a single-port macro cannot give, and flip-flops keep the flow simple. Programs are position
+* **Shared 64-word instruction memory in flip-flops**, not an SRAM macro: both engines need a read port every
+  cycle, which a single-port macro cannot give, and flip-flops keep the flow simple. The host can write it but
+  not read it directly; to check a word, point a disabled engine at it with an injected `JMP` and read the
+  engine's `EXEC` register (`Driver.read_imem`). Programs are position
   independent (jumps are relative to `ORG`), so the host packs several programs into the memory.
 * **Jumps reach 32 instructions**, programs may be up to 64 long (the I2C target is 41).
 * **Fixed write priority between engines** instead of pin ownership registers: simple, deterministic, and

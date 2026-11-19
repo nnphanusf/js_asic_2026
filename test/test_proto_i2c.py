@@ -96,22 +96,22 @@ async def test_i2c_controller_stretch_timeout(dut):
 
 @cocotb.test()
 async def test_i2c_target(dut):
-    """The two-engine target (watcher on SM2, target on SM3) against an independent controller."""
+    """The two-engine target (watcher on SM0, target on SM1) against an independent controller."""
     tb = TB(dut)
     await tb.start()
     scl, sda = lines(dut)
-    await tb.load(load_program("i2c_cond"), 2)
-    await tb.load(load_program("i2c_target"), 3)
-    await tb.enable(0b1100)
+    await tb.load(load_program("i2c_cond"), 0)
+    await tb.load(load_program("i2c_target"), 1)
+    await tb.enable(0b11)
     for timing in (STANDARD, FAST):
         mon = I2cMonitor(scl, sda, timing)
         ctrl = I2cController(scl, sda, timing)
         # Write: the target ACKs and hands the bytes to the host.
         assert await ctrl.write(0x42, [0x01, 0x80, 0xFF])
-        await tb.wait_rx(3, 3, timeout_cycles=20000)
-        assert [w & 0xFF for w in await tb.pop(3, 3)] == [0x01, 0x80, 0xFF]
+        await tb.wait_rx(1, 3, timeout_cycles=20000)
+        assert [w & 0xFF for w in await tb.pop(1, 3)] == [0x01, 0x80, 0xFF]
         # Read: bytes come from the TX FIFO.
-        await tb.push(3, [0xDE, 0xAD])
+        await tb.push(1, [0xDE, 0xAD])
         assert await ctrl.read(0x42, 2) == [0xDE, 0xAD]
         # Another address: no ACK, nothing reaches the host.
         assert not await ctrl.write(0x43, [0x55])
@@ -121,13 +121,13 @@ async def test_i2c_target(dut):
 
         await Timer(40, "us")
         assert not reader.done()
-        await tb.push(3, [0x99])
+        await tb.push(1, [0x99])
         got = await reader
         dut._log.info(f"{timing.name}: stretched read returned {got}, bus events {mon.events}")
         assert got == [0x99], timing.name
-        await tb.wait_rx(3, 1, timeout_cycles=20000)
-        assert [w & 0xFF for w in await tb.pop(3, 1)] == [0x07]
-        assert await tb.rx_level(3) == 0
+        await tb.wait_rx(1, 1, timeout_cycles=20000)
+        assert [w & 0xFF for w in await tb.pop(1, 1)] == [0x07]
+        assert await tb.rx_level(1) == 0
         assert not mon.errors, (timing.name, mon.errors)
         assert mon.events.count("Sr") == 1 and mon.events.count("P") == 4
         mon.stop()

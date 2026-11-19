@@ -9,11 +9,11 @@ You can also include images in this folder and reference them in the markdown. E
 
 ## How it works
 
-Bitweaver is a programmable protocol emulator. It has no fixed UART, SPI or I2C blocks. Instead, four small
+Bitweaver is a programmable protocol emulator. It has no fixed UART, SPI or I2C blocks. Instead, two small
 engines that keep exact cycle timing drive and sample pins under firmware control. A protocol is a short program, so
 the chip can be reprogrammed after fabrication to speak protocols it was never designed for.
 
-- **Four engines (SM0 to SM3)** share a 64 x 16-bit instruction memory. Each has a program counter, scratch
+- **Two engines (SM0 and SM1)** share a 64 x 16-bit instruction memory. Each has a program counter, scratch
   registers X and Y, input and output shift registers with automatic push and pull, 4-deep TX and RX FIFOs (one
   8-deep FIFO when joined), a 16.8 fractional clock divider, up to three side-set pins and a 5-bit delay field on
   every instruction.

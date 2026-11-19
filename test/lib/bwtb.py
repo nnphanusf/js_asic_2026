@@ -15,7 +15,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, Lock, ReadOnly, RisingEdge
 
 from bitweaver import regmap as R
-from bitweaver.asm import Program, assemble_one, instr
+from bitweaver.asm import Program, assemble_one, enc_jmp, instr
 from bitweaver.iss import Bitweaver
 from bitweaver.loader import frame_bytes, load_ops, pad_masks, pinvec_ops
 
@@ -193,6 +193,16 @@ class TB:
     async def exec(self, sm: int, text_or_word):
         word = instr(text_or_word) if isinstance(text_or_word, str) else text_or_word
         await self.write(R.addr("EXEC", sm), [word])
+
+    async def read_imem(self, addr: int, sm: int = 0) -> int:
+        """Read an instruction-memory word through engine `sm` (there is no host read port).
+
+        Points the engine there with an injected JMP and reads its instruction register. The engine
+        must be disabled; its ORG register (and JMP_PIN) and PC are changed.
+        """
+        await self.write(R.addr("ORG", sm), [R.pack("ORG", org=addr & 0x20)])
+        await self.exec(sm, enc_jmp(R.COND_ALWAYS, addr & 31))
+        return await self.read1(R.addr("EXEC", sm))
 
     async def stat(self, sm: int) -> int:
         return await self.read1(R.addr("STAT", sm))

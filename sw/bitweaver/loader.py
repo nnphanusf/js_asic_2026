@@ -263,6 +263,16 @@ class Driver:
     def exec(self, sm: int, word: int) -> None:
         self.write(R.addr("EXEC", sm), [word])
 
+    def read_imem(self, addr: int, sm: int = 0) -> int:
+        """Read an instruction-memory word through engine `sm` (there is no host read port).
+
+        Points the disabled engine there with an injected JMP and reads its instruction register;
+        the engine's ORG register (and JMP_PIN) and PC are changed.
+        """
+        self.write(R.addr("ORG", sm), [R.pack("ORG", org=addr & 0x20)])
+        self.exec(sm, enc_jmp(R.COND_ALWAYS, addr & 31))
+        return self.read(R.addr("EXEC", sm))[0]
+
     def rx_level(self, sm: int) -> int:
         return (self.read(R.addr("STAT", sm))[0] >> 12) & 15
 

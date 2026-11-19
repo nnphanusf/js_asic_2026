@@ -3,7 +3,7 @@
 # Bitweaver: a programmable protocol emulator
 
 Bitweaver is a Tiny Tapeout chip (IHP SG13CMOS5L, 8x4 tiles, 60 MHz) with no fixed UART, SPI or I2C hardware.
-Four small engines run bit-banging programs with exact cycle timing, and a handful of generic primitives
+Two small engines run bit-banging programs with exact cycle timing, and a handful of generic primitives
 (open-drain pads, a WAIT with timeout, a bit-level assist unit for NRZI, Manchester, bit stuffing and CRCs, a
 timestamp, FIFO chaining) let firmware speak protocols the chip was never designed around.
 
@@ -14,12 +14,12 @@ timestamp, FIFO chaining) let firmware speak protocols the chip was never design
 | UART (9600–921600 baud, 8N1/8E1) | SPI controller modes 0–3, SPI target | I2C controller (100/400 kHz) and target |
 | WS2812 LEDs | JTAG | SWD (Arm debug) |
 | PS/2 | CAN 2.0A (500 kbit/s, 1 Mbit/s) | low-speed USB packets |
-| 1-Wire | four of the above at the same time | |
+| 1-Wire | SPI and I2C at the same time | |
 
-![Four engines running WS2812, UART, SPI and JTAG at the same time](docs/images/four_protocols.svg)
+![Both engines running SPI and JTAG at the same time](docs/images/two_protocols.svg)
 
-*Four engines, four protocols, one 60 MHz clock: WS2812, UART at 1.9 Mbaud, an SPI frame and a JTAG IR scan
-(rendered from the cycle-accurate simulator by `scripts/wave_svg.py`; the RTL matches it on every cycle).*
+*Two engines, two protocols, one 60 MHz clock: an SPI frame and a JTAG IR scan (rendered from the cycle-accurate
+simulator by `scripts/wave_svg.py`; the RTL matches it on every cycle).*
 
 ## Documentation
 

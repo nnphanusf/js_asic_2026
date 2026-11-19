@@ -37,7 +37,8 @@ def test_id_and_config_readback(driver):
     d = driver(b)
     assert d.read(R.addr("ID"), 2, inc=True) == [R.CHIP_ID, R.CHIP_VERSION]
     d.write(R.IMEM_BASE, [0x1234, 0xABCD, 0x5555], inc=True)
-    assert d.read(R.IMEM_BASE, 3, inc=True) == [0x1234, 0xABCD, 0x5555]
+    assert d.read(R.IMEM_BASE, 3, inc=True) == [0, 0, 0]  # instruction memory is write only
+    assert b.iss.imem[:3] == [0x1234, 0xABCD, 0x5555]
     for k in range(R.NUM_SM):
         for r in R.SM_REGS:
             if r.name in ("FIFO", "EXEC", "STAT"):
@@ -50,24 +51,28 @@ def test_id_and_config_readback(driver):
     d.write(R.addr("PAD_OD_LO"), [0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF], inc=True)
     assert d.read(R.addr("PAD_OD_LO"), 4, inc=True) == [0xF800, 7, 0xF81F, 7]
     assert d.read(0x1F) == [0] and d.read(0x6E) == [0] and d.read(0xC0) == [0]
+    assert d.read(R.SM_BASE + R.NUM_SM * R.SM_STRIDE) == [0]  # no engine behind this window
+    # Words are read back through an engine instead.
+    d.write(R.IMEM_BASE + 40, [0x7777])
+    assert [d.read_imem(a, sm=1) for a in (0, 1, 2, 40)] == [0x1234, 0xABCD, 0x5555, 0x7777]
 
 
 def test_spi_first_bytes_are_id_and_status():
     b = Bench()
     d = SpiDriver(b)
     d.read(R.addr("ID"))
-    assert d.first_bytes == (R.SPI_ID_BYTE, 0x0F)  # all TX FIFOs not full, all RX FIFOs empty
-    d.push(2, [1, 2, 3, 4])
-    d.exec(1, instr("push noblock"))
+    assert d.first_bytes == (R.SPI_ID_BYTE, 0x03)  # both TX FIFOs not full, both RX FIFOs empty
+    d.push(1, [1, 2, 3, 4])
+    d.exec(0, instr("push noblock"))
     d.read(R.addr("ID"))
-    assert d.first_bytes == (R.SPI_ID_BYTE, 0x2B)
+    assert d.first_bytes == (R.SPI_ID_BYTE, 0x11)  # SM0: TX not full, RX not empty; SM1: TX full
 
 
 def test_fifo_host_side():
     b = Bench()
     d = SpiDriver(b)
     d.push(0, [1, 2, 3, 4, 5])  # the fifth word overflows
-    assert d.read(R.addr("FSTAT")) == [0xF0E1]
+    assert d.read(R.addr("FSTAT")) == [0x3021]  # SM0 TX full; SM1 TX empty; both RX empty
     assert d.read(R.addr("FDEBUG")) == [0x0001]
     d.write(R.addr("FDEBUG"), [0x0001])
     assert d.read(R.addr("FDEBUG")) == [0]
@@ -325,15 +330,15 @@ def test_irq_set_wait_clear_and_rel():
     b = Bench()
     d = FastDriver(b)
     d.load(assemble_one("irq wait 1 rel\n set x, 7\nh: jmp h"), 1)  # flag (1+1)&3 = 2
-    d.load(assemble_one("wait 1 irq 2\n set y, 3\n irq 5\n irq clear 5\n irq 6\nh: jmp h"), 2)
-    d.enable(0b010)
+    d.load(assemble_one("wait 1 irq 2\n set y, 3\n irq 5\n irq clear 5\n irq 6\nh: jmp h"), 0)
+    d.enable(0b10)
     b.run(6)
     assert d.read(R.addr("IRQ")) == [0b100]
-    assert d.read(R.addr("STAT", 1))[0] & 63 == d.origin - 9 + 0
-    d.enable(0b100)
+    assert d.read(R.addr("STAT", 1))[0] & 63 == 0  # still waiting for flag 2 to clear
+    d.enable(0b01)
     b.run(10)
     assert d.read(R.addr("IRQ")) == [0b1000000]  # 2 cleared by the wait, 5 set then cleared, 6 set
-    assert reg(b, d, "x", 1) == 7 and reg(b, d, "y", 2) == 3
+    assert reg(b, d, "x", 1) == 7 and reg(b, d, "y", 0) == 3
 
 
 def test_irq_host_force_clear_and_int_pin():
@@ -344,7 +349,7 @@ def test_irq_host_force_clear_and_int_pin():
     d.write(R.addr("IRQ_FORCE"), [0x10])
     b.run(4)
     assert d.read(R.addr("IRQ")) == [0x01] and b.host_irq == 1
-    assert d.read(R.addr("INT_STAT"))[0] == 0xF001
+    assert d.read(R.addr("INT_STAT"))[0] == 0x3001  # IRQ flag 0, both TX FIFOs not full
     d.write(R.addr("IRQ"), [0x01])
     assert b.host_irq == 0
     d.write(R.addr("INT_EN"), [0x0100])  # RX FIFO 0 not empty
@@ -417,10 +422,10 @@ def test_pin_priority_between_engines_and_host():
     d = FastDriver(b)
     d.set_pins(0, 0x7FFE0)
     d.load(assemble_one(".pins set=5 set_count=2\n.wrap_target\n set pins, 1\n.wrap"), 0)
-    d.load(assemble_one(".pins set=6 set_count=2\n.wrap_target\n set pins, 0\n.wrap"), 3)
-    d.enable(0b1001)
+    d.load(assemble_one(".pins set=6 set_count=2\n.wrap_target\n set pins, 0\n.wrap"), 1)
+    d.enable(0b11)
     b.run(4)
-    assert (b.pads() >> 5) & 7 == 0b001  # pin 6: engine 3 beats engine 0
+    assert (b.pads() >> 5) & 7 == 0b001  # pin 6: engine 1 beats engine 0
     d.write(R.addr("PIN_OUT_LO"), [0xFFE0])
     assert (b.pads() >> 5) & 0x3F == 0b111001  # engines beat the host on pins 5..7
 
@@ -455,13 +460,13 @@ def test_fifo_join_and_chain():
     d.enable(0b10)
     b.run(60)
     assert d.rx_level(1) == 8
-    # Engine 2 doubles what engine 3 produces: 3's RX FIFO feeds 2's TX FIFO.
-    d.load(assemble_one(".wrap_target\n pull\n mov isr, osr\n push\n.wrap"), 3)
-    d.load(assemble_one(".fifo chain=3\n.wrap_target\n pull\n mov isr, !osr\n push\n.wrap"), 2)
-    d.enable(0b1100)
-    d.push(3, [0x00FF, 0x1234])
+    # Engine 0 inverts what engine 1 relays: 1's RX FIFO feeds 0's TX FIFO.
+    d.load(assemble_one(".wrap_target\n pull\n mov isr, osr\n push\n.wrap"), 1)
+    d.load(assemble_one(".fifo chain=1\n.wrap_target\n pull\n mov isr, !osr\n push\n.wrap"), 0)
+    d.enable(0b11)
+    d.push(1, [0x00FF, 0x1234])
     b.run(30)
-    assert d.pop(2, 2) == [0xFF00, 0xEDCB]
+    assert d.pop(0, 2) == [0xFF00, 0xEDCB]
 
 
 def test_restart():

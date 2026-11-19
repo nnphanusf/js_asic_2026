@@ -4,7 +4,7 @@
  *
  * Bitweaver: a programmable protocol emulator.
  *
- * Four identical engines (bw_sm) run small programs from a shared 64-word instruction memory and
+ * Two identical engines (bw_sm) run small programs from a shared 64-word instruction memory and
  * drive a 19-pin virtual pin space. A host loads programs and moves data over an SPI target port.
  * See docs/architecture.md for the block diagram and docs/isa.md for the instruction set.
  *
@@ -32,7 +32,9 @@ module tt_um_nnphanusf_bitweaver (
     input  wire       rst_n     // reset_n - low to reset
 );
 
-  localparam NSM = 4;
+  localparam NSM = `BW_NUM_SM;  // engines (two: four did not route in an 8x4 tile)
+  localparam SMB = `BW_SMB;     // bits that name an engine
+  localparam PAD = 4 - NSM;     // status nibbles keep one bit position per possible engine
   localparam [18:0] OUT_MASK = 19'h7FFE0;  // PIN5..PIN18 have output registers
   localparam [18:0] OD_MASK = 19'h7F800;   // PIN11..PIN18 support open drain
   localparam [18:0] FILT_MASK = 19'h7F81F; // PIN0..4 and PIN11..18 have glitch filters
@@ -79,7 +81,7 @@ module tt_um_nnphanusf_bitweaver (
   wire host_mosi = s2[5];
 
   // ------------------------------------------------------------------ shared registers
-  reg  [3:0]  en;
+  reg  [NSM-1:0] en;
   reg  [15:0] int_en;
   reg  [7:0]  irq;
   reg  [15:0] fdebug;
@@ -110,11 +112,14 @@ module tt_um_nnphanusf_bitweaver (
   wire wr_global = wr_en && (wr_addr < `BW_SM_BASE);
   wire wr_imem = wr_en && (wr_addr[7:6] == 2'b10);
   wire [NSM-1:0] wr_sm;
-  wire [NSM-1:0] restart = (wr_en && wr_addr == `BW_A_CTRL) ? wr_data[7:4] : 4'd0;
+  wire [NSM-1:0] restart = (wr_en && wr_addr == `BW_A_CTRL) ? wr_data[4+:NSM] : {NSM{1'b0}};
 
-  // Engine register windows are 0x20..0x5F; rd_k is the engine a read address belongs to.
-  wire       rd_is_sm = (rd_addr >= `BW_SM_BASE) && (rd_addr < 8'h60);
-  wire [1:0] rd_k = rd_addr[5:4] ^ 2'b10;
+  // Engine n has its register window at 0x20 + 0x10 * n; rd_k is the engine a read address belongs to.
+  wire           rd_is_sm = (rd_addr >= `BW_SM_BASE) && (rd_addr < `BW_SM_BASE + 8'h10 * NSM);
+  /* verilator lint_off UNUSEDSIGNAL */
+  wire [3:0]     rd_kk = rd_addr[7:4] - 4'd2;  // only the low SMB bits name an engine
+  /* verilator lint_on UNUSEDSIGNAL */
+  wire [SMB-1:0] rd_k = rd_kk[SMB-1:0];
   // A FIFO read only pops if the FIFO held data when the word was latched for the host.
   wire       rd_is_fifo_sm = rd_is_sm && (rd_addr[3:0] == `BW_O_FIFO);
   reg        rd_armed;
@@ -122,12 +127,10 @@ module tt_um_nnphanusf_bitweaver (
   // ------------------------------------------------------------------ instruction memory
   wire [NSM*6-1:0]  pc_next;
   wire [NSM*16-1:0] imem_rdata;
-  wire [15:0]       imem_host_rdata;
   bw_imem #(.NUM_SM(NSM)) u_imem (
       .clk(clk), .rst_n(rstn),
       .we(wr_imem), .waddr(wr_addr[5:0]), .wdata(wr_data),
-      .sm_raddr(pc_next), .sm_rdata(imem_rdata),
-      .host_raddr(rd_addr[5:0]), .host_rdata(imem_host_rdata)
+      .sm_raddr(pc_next), .sm_rdata(imem_rdata)
   );
 
   // ------------------------------------------------------------------ engines
@@ -135,7 +138,7 @@ module tt_um_nnphanusf_bitweaver (
   wire [NSM*19-1:0] po_mask, po_val, pd_mask, pd_val;
   wire [NSM*8-1:0]  irq_set, irq_clr;
   wire [NSM-1:0]    tx_full, tx_empty, rx_full, rx_empty, host_push, chain_en;
-  wire [NSM*2-1:0]  chain_src;
+  wire [NSM*SMB-1:0] chain_src;
   wire [NSM*16-1:0] rx_head;
   wire [NSM-1:0]    ev_txover, ev_txstall, ev_rxstall;
   reg  [NSM-1:0]    rx_pop, chain_push;
@@ -157,7 +160,7 @@ module tt_um_nnphanusf_bitweaver (
           .tx_full(tx_full[g]), .tx_empty(tx_empty[g]), .rx_full(rx_full[g]), .rx_empty(rx_empty[g]),
           .rx_head(rx_head[g*16+:16]), .host_push(host_push[g]),
           .rx_pop(rx_pop[g]), .chain_push(chain_push[g]), .chain_wdata(chain_wdata[g*16+:16]),
-          .chain_en(chain_en[g]), .chain_src(chain_src[g*2+:2]),
+          .chain_en(chain_en[g]), .chain_src(chain_src[g*SMB+:SMB]),
           .ev_txover(ev_txover[g]), .ev_txstall(ev_txstall[g]), .ev_rxstall(ev_rxstall[g])
       );
     end
@@ -174,14 +177,14 @@ module tt_um_nnphanusf_bitweaver (
   endgenerate
 
   integer k;
-  reg [1:0] cs;
+  reg [SMB-1:0] cs;
   reg       mv;
   always @* begin
     rx_pop = host_pop;
-    chain_push = 4'd0;
+    chain_push = {NSM{1'b0}};
     chain_wdata = {NSM * 16{1'b0}};
     for (k = 0; k < NSM; k = k + 1) begin
-      cs = chain_src[k*2+:2];
+      cs = chain_src[k*SMB+:SMB];
       mv = chain_en[k] & ~rx_empty[cs] & ~tx_full[k] & ~host_push[k] & ~host_pop[cs];
       chain_push[k] = mv;
       chain_wdata[k*16+:16] = rx_head[cs*16+:16];
@@ -211,9 +214,10 @@ module tt_um_nnphanusf_bitweaver (
   end
 
   // ------------------------------------------------------------------ status
-  wire [15:0] int_stat = {~tx_full, ~rx_empty, irq};
-  wire [15:0] fstat = {rx_empty, rx_full, tx_empty, tx_full};
-  assign spi_status = {~rx_empty, ~tx_full};
+  wire [PAD-1:0] z = {PAD{1'b0}};
+  wire [15:0] int_stat = {z, ~tx_full, z, ~rx_empty, irq};
+  wire [15:0] fstat = {z, rx_empty, z, rx_full, z, tx_empty, z, tx_full};
+  assign spi_status = {z, ~rx_empty, z, ~tx_full};
 
   // ------------------------------------------------------------------ shared register writes
   wire        hw = wr_global;
@@ -224,11 +228,11 @@ module tt_um_nnphanusf_bitweaver (
   wire [7:0]  w1c_irq = (hw && wr_addr == `BW_A_IRQ) ? wr_data[7:0] : 8'd0;
   wire [7:0]  force_irq = (hw && wr_addr == `BW_A_IRQ_FORCE) ? wr_data[7:0] : 8'd0;
   wire [15:0] w1c_dbg = (hw && wr_addr == `BW_A_FDEBUG) ? wr_data : 16'd0;
-  wire [15:0] dbg_ev = {ev_rxstall, ev_txstall, rxunder, ev_txover};
+  wire [15:0] dbg_ev = {z, ev_rxstall, z, ev_txstall, z, rxunder, z, ev_txover};
 
   always @(posedge clk or negedge rstn) begin
     if (!rstn) begin
-      en          <= 4'd0;
+      en          <= {NSM{1'b0}};
       int_en      <= 16'd0;
       irq         <= 8'd0;
       fdebug      <= 16'd0;
@@ -243,7 +247,7 @@ module tt_um_nnphanusf_bitweaver (
     end else begin
       if (hw) begin
         case (wr_addr)
-          `BW_A_CTRL:        en <= wr_data[3:0];
+          `BW_A_CTRL:        en <= wr_data[NSM-1:0];
           `BW_A_INT_EN:      int_en <= wr_data;
           `BW_A_TS_PRESCALE: ts_prescale <= wr_data[7:0];
           `BW_A_PAD_OD_LO:   pad_od[15:0] <= wr_data & OD_MASK[15:0];
@@ -275,7 +279,7 @@ module tt_um_nnphanusf_bitweaver (
   // ------------------------------------------------------------------ host read mux
   always @* begin
     if (rd_addr[7]) begin
-      rd_data = rd_addr[6] ? 16'd0 : imem_host_rdata;
+      rd_data = 16'd0;  // instruction memory is write only from the host
     end else if (rd_is_sm) begin
       rd_data = sm_rdata[rd_k*16+:16];
     end else if (rd_addr >= `BW_SM_BASE) begin
@@ -284,7 +288,7 @@ module tt_um_nnphanusf_bitweaver (
       case (rd_addr)
         `BW_A_ID:          rd_data = `BW_CHIP_ID;
         `BW_A_VERSION:     rd_data = `BW_CHIP_VERSION;
-        `BW_A_CTRL:        rd_data = {12'd0, en};
+        `BW_A_CTRL:        rd_data = {{(16-NSM){1'b0}}, en};
         `BW_A_INT_STAT:    rd_data = int_stat;
         `BW_A_INT_EN:      rd_data = int_en;
         `BW_A_IRQ:         rd_data = {8'd0, irq};

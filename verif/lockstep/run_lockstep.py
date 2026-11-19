@@ -167,8 +167,11 @@ def make_stimulus(seed: int, cycles: int) -> bytes:
             elif r < 0.79:
                 reg = rng.choice(R.GLOBAL_REGS)
                 s.write(reg.addr, [rng.randrange(1 << 16)], half=half)
-            elif r < 0.80:
+            elif r < 0.795:
                 s.write(R.addr("FDEBUG"), [0xFFFF], half=half)
+            elif r < 0.80:  # any address, including empty windows, which must ignore the write
+                s.write(rng.randrange(256), [rng.randrange(1 << 16) for _ in range(rng.randint(1, 3))],
+                        inc=rng.random() < 0.5, half=half)
             elif r < 0.8005:
                 s.reset(rng.randrange(1, 10))
                 s.idle(3)
