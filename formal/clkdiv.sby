@@ -1,0 +1,18 @@
+# Clock divider: the registered zero flag that drives tick always equals (cnt == 0), so the
+# registered tick is cycle-for-cycle the same as the combinational zero detect it replaced.
+[tasks]
+prove
+
+[options]
+prove: mode prove
+prove: depth 4
+
+[engines]
+prove: abc pdr
+
+[script]
+read_verilog -formal -sv bw_clkdiv.v
+prep -top bw_clkdiv
+
+[files]
+../src/bw_clkdiv.v

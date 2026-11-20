@@ -6,7 +6,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        job: [fifo, host_spi, sm_props, opendrain]
+        job: [fifo, host_spi, sm_props, opendrain, clkdiv]
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6

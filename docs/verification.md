@@ -85,6 +85,11 @@ All jobs run in the `formal` workflow. "Proved" means an unbounded proof (PDR or
 | `host_spi.sby` | `bw_host_spi` | legal phase and bit counter; write and pop strobes are single-cycle and only follow a real SCK edge; MISO low while deselected; **no deadlock**: one cycle of CS_N high always returns to idle | proved (abc pdr); 3 covers reached |
 | `sm_props.sby` | one `bw_sm` with an unconstrained instruction stream, pins, flags and host writes | shift counters ≤ 16; injected-instruction flags consistent; wait-progress flags only with WAIT/IRQ in IR; restart gives PC = ORG and clean state; IR equals memory[PC] when not injected; **PC stays inside the wrap range** without a jump; a disabled engine does not move | proved (abc pdr, 7 min); BMC to depth 24; 12 covers reached, one per opcode completing plus stall, exec and stuff cases |
 | `opendrain.sby` | whole chip | an open-drain pad never drives high; no output register bits exist for input-only pins | proved (k-induction) |
+| `clkdiv.sby` | `bw_clkdiv` | the registered zero flag that drives the engine tick always equals `cnt == 0`, so the registered tick is the combinational zero detect it replaced | proved (abc pdr) |
+
+One proof was run once rather than kept as a job: when the instruction-memory ports were changed to read each
+word's next value (a timing fix, see [architecture.md](architecture.md#timing)), Yosys `equiv_make` /
+`equiv_induct` proved the new memory equivalent to the previous one on all 1068 state bits and outputs.
 
 The engine proof assumes two facts about its environment, stated in `src/bw_sm_formal.vh`: the host performs at
 most one register write per cycle, and the instruction memory is not rewritten under the address being executed.
@@ -155,6 +160,6 @@ make -C sw test                               # pytest
 cd test && make && python3 -m cocotb_tools.check_results results.xml
 cd verif/lockstep && make run SEEDS=100 CYCLES=100000
 cd verif/lockstep && make cov SEEDS=100 && python3 cov_report.py
-cd formal && for j in fifo host_spi sm_props opendrain; do sby -f $j.sby; done
+cd formal && for j in fifo host_spi sm_props opendrain clkdiv; do sby -f $j.sby; done
 scripts/synth_area.sh                         # area against the IHP cell library
 ```

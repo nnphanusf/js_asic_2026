@@ -75,6 +75,58 @@ async def test_fractional_divider(dut):
 
 
 @cocotb.test()
+async def test_divider_integer_part_one_and_carries(dut):
+    """Integer part 1 and 2 with fractional carries, around the divider's registered zero flag.
+
+    The pin toggles on every tick, so the number of transitions counts the ticks; lock-step checks
+    the exact tick cycles against the reference model.
+    """
+    tb = await setup(dut, ".pins set=5 set_count=1\n.init set pindirs, 1\n set pins, 1\n set pins, 0",
+                     enable=False)
+    for div_int, div_frac, ticks in ((1, 255, 150), (1, 128, 200), (1, 1, 299), (2, 255, 100), (1, 0, 300)):
+        await tb.write(R.addr("CLKDIV_INT", 0), [div_int, div_frac], inc=True)
+        await tb.enable(1)
+        w = await capture(tb, 301, 5)
+        await tb.disable(1)
+        edges = sum(a != b for a, b in zip(w, w[1:]))
+        assert abs(edges - ticks) <= 1, (div_int, div_frac, edges)
+    tb.done()
+
+
+@cocotb.test()
+async def test_divider_integer_part_zero(dut):
+    """Integer part 0 counts 65536 cycles; a fractional carry then brings the next tick one cycle later."""
+    tb = await setup(dut, ".pins set=5 set_count=1\n.init set pindirs, 1\n set pins, 1\n set pins, 0",
+                     enable=False)
+    await tb.write(R.addr("CLKDIV_INT", 0), [0, 128], inc=True)
+    await tb.enable(1)
+    await tb.cycles_(65536 - 400)
+    w = await capture(tb, 420, 5)
+    assert sum(a != b for a, b in zip(w, w[1:])) == 2  # the 65536-cycle tick, then one a cycle later
+    tb.done()
+
+
+@cocotb.test()
+async def test_imem_rewrite_on_every_fetch_phase(dut):
+    """Host writes to the word an engine is fetching, landing on each cycle of a two-cycle loop.
+
+    The instruction memory is write-first, so a word written in the cycle the engine fetches it is
+    the word that runs; lock-step checks every cycle against the reference model.
+    """
+    tb = await setup(dut, ".pins set=5 set_count=1\n.init set pindirs, 1\n.wrap_target\n set pins, 1\n"
+                     " set pins, 0\n.wrap", clkdiv=1)
+    first = R.IMEM_BASE + tb.origin - 2
+    for delay in range(4):
+        await tb.cycles_(delay)
+        await tb.write(first, [instr("set pins, 0")])  # the loop now drives 0 on both steps
+        assert "1" not in await capture(tb, 20, 5)
+        await tb.cycles_(delay)
+        await tb.write(first, [instr("set pins, 1")])
+        assert "1010" in await capture(tb, 20, 5)
+    tb.done()
+
+
+@cocotb.test()
 async def test_wrap_and_position_independence(dut):
     src = ".pins set=5 set_count=1\n.init set pindirs, 1\n set x, 3\n.wrap_target\nl: set pins, 1\n " \
           "jmp x-- l\n set pins, 0 [3]\n.wrap"
