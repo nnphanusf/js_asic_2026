@@ -23,7 +23,7 @@ next-state value from the current state and the inputs sampled at the clock edge
 lock-step (layer 2) shows that the RTL implements the model exactly, and the independent protocol models (layer 3)
 are what show that the model itself does the right thing.
 
-The pytest suite (`make -C sw test`, 74 tests) checks the assembler encodings and error messages, a
+The pytest suite (`make -C sw test`, 77 tests) checks the assembler encodings and error messages, a
 disassemble/re-assemble round trip over the whole 16-bit encoding space, the generated files
 (`src/bw_defs.vh`, `docs/regmap.md` must match `regmap.py`), each documented instruction rule on the ISS, that
 every program in `sw/programs` assembles, and the MicroPython board driver against the ISS.
@@ -51,6 +51,7 @@ reproduced with `make run FIRST=<seed> SEEDS=1`.
 
 | Campaign | Seeds | Cycles | Result |
 |---|---|---|---|
+| Local, 2026-11-20 (two engines, timing fixes, 144966f) | 1000 × 100 000 | 100 000 000 | all identical |
 | Local, 2026-11-19 (two engines) | 1000 × 100 000 | 100 000 000 | all identical |
 | Local, 2026-11-17 (four engines) | 1000 × 100 000 | 100 000 000 | all identical |
 | CI (`lockstep` workflow, every push) | 50 × 200 000 | 10 000 000 | all identical |
@@ -89,7 +90,7 @@ All jobs run in the `formal` workflow. "Proved" means an unbounded proof (PDR or
 
 One proof was run once rather than kept as a job: when the instruction-memory ports were changed to read each
 word's next value (a timing fix, see [architecture.md](architecture.md#timing)), Yosys `equiv_make` /
-`equiv_induct` proved the new memory equivalent to the previous one on all 1068 state bits and outputs.
+`equiv_induct` proved the new memory equivalent to the previous one (1068 of 1068 equivalence cells).
 
 The engine proof assumes two facts about its environment, stated in `src/bw_sm_formal.vh`: the host performs at
 most one register write per cycle, and the instruction memory is not rewritten under the address being executed.
@@ -109,8 +110,8 @@ holes.
 | Metric | Result |
 |---|---|
 | Functional bins (465 reachable) | 465 / 465 (100 %) |
-| Verilator line coverage | 100 % (287 / 287 lines) |
-| Verilator toggle coverage | 97.8 % (6394 / 6540 points); all 146 missing points are bits that cannot change |
+| Verilator line coverage | 100 % (285 / 285 lines) |
+| Verilator toggle coverage | 98.3 % (8444 / 8590 points); all 146 missing points are bits that cannot change |
 
 The 146 untoggled points were each checked: the status bits that the register layout reserves for engines 2 and 3,
 which the two-engine chip does not have (`INT_STAT`, `FSTAT`, `FDEBUG`, the SPI status byte: 76), `PIN_OUT`/`PIN_OE`
@@ -128,9 +129,10 @@ is due, which now also has a directed test (`test_isa.test_bau_stuff_bit_into_re
 The whole cocotb suite also runs on gate-level netlists (`make GATES=yes`), with lock-step off (the netlist has no
 internal state to compare; outputs are still checked by the protocol models and expected values):
 
-* locally, on the Yosys netlist mapped to the IHP SG13CMOS5L cells (`scripts/synth_area.sh`): 53 / 53 tests pass, for the
-  four-engine and again for the two-engine design;
-* in CI, on the routed netlist from LibreLane (`gds` workflow, `gl_test` job).
+* locally, on the Yosys netlist mapped to the IHP SG13CMOS5L cells (`scripts/synth_area.sh`): every test passes,
+  for the four-engine design (53 tests) and for the current two-engine design (56 tests);
+* in CI, on the routed netlist from LibreLane (`gds` workflow, `gl_test` job): 56 / 56 on 144966f, the first
+  two-engine design to pass hardening.
 
 ## Bugs found, and by what
 

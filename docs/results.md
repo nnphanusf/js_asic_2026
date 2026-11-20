@@ -5,15 +5,30 @@
 | | |
 |---|---|
 | Process, size | IHP SG13CMOS5L, Tiny Tapeout 8x4 tiles |
-| Clock | 50 MHz sign-off (`CLOCK_PERIOD` 20 ns), the planned fallback: at 60 MHz the routed design missed setup in the slow and typical corners (history below) |
-| Cells (Yosys + ABC, IHP typical library) | 14 922, about 243 000 um2, about 32 % of the core (24 076 instances after place and route, with buffers and 2 159 hold-fix delay cells) |
+| Clock | 50 MHz (`CLOCK_PERIOD` 20 ns), met in all three corners after routing. This is the planned fallback: the first routed run missed the original 60 MHz target in the slow and typical corners (history below) |
+| Timing after routing (LibreLane STA, 50 MHz) | no setup or hold violation in any corner; worst register-to-register setup slack under 1 ns in the slow corner (1.08 V, 125 °C), about 8 ns typical (1.2 V, 25 °C), over 10 ns fast; no max-cap violations, 6 max-slew violations in the slow corner (a warning in this flow) |
+| Cells after place and route | 21 201 standard cells (fill and tap cells excluded): 2 201 flip-flops, 4 846 buffers, 2 261 hold delay cells; placement utilisation 24.8 % |
+| Cells (Yosys + ABC, IHP typical library) | 14 922, about 243 000 um2 |
+| Routing | 1.54 m of wire after detailed routing, zero violations; global routing Metal2 39 %, Metal3 46 %, Metal4 3 %, no overflow |
+| Power (LibreLane IR report, typical corner, default switching activity) | 8.1 mW; worst IR drop 0.2 mV (0.02 %) |
 | Critical path estimate (ABC delay-driven mapping, slow 1.08 V / 125 C, no wire load) | 6.47 ns (7.57 ns before the timing fixes); routed wires add far more, see the history |
 | Engines | 2, sharing a 64 x 16-bit instruction memory |
 | Protocols demonstrated | 12 (table below), plus two at once |
 
-The two-engine design routes cleanly (DRC, LVS, antenna, hold); its first run missed setup at 60 MHz, and the
-timing fixes and the 50 MHz constraint are in the history table at the end. The four-engine design did not route;
-see the history table and [architecture.md](architecture.md#why-two-engines).
+The chip hardens cleanly at 50 MHz: `gds`, `precheck` (the PDK's KLayout SG13CMOS5L DRC and every Tiny Tapeout
+check), `gl_test` (the cocotb suite on the routed netlist) and `viewer` are green, with LVS and antenna checks
+clean. The first two-engine run missed 60 MHz, and the history table at the end describes the timing fixes. The
+four-engine design did not route; see the history table and [architecture.md](architecture.md#why-two-engines).
+
+The GDS summary lists two kinds of synthesis warning, neither a defect:
+- "Replacing memory `\mem` with list of registers" means the FIFO storage is built from flip-flops, as intended.
+- "Latch inferred for signal `\bw_sm.\bi`" refers to `bi`, the integer loop variable of the `MOV` bit reverse
+  (`src/bw_sm.v`). It holds its value outside the reverse case, but nothing reads it, so it is removed. The netlist
+  has no latch cells: the cell table lists only `dfrbpq` flip-flops.
+
+A loop-free rewrite of the reverse was proved equivalent (Yosys `equiv_induct`, 1960 of 1960 equivalence cells).
+It was not adopted: it changes the mapped netlist (14 975 cells instead of 14 922), and with under 1 ns of
+slow-corner slack the signed-off netlist is kept as it is.
 
 ## Protocols
 
@@ -52,7 +67,8 @@ the `gds` workflow's LibreLane reports.
 
 | Date | Design state | Cells | Notes |
 |---|---|---|---|
-| 2026-11-20 | Timing fixes on the two-engine design | 14 922 IHP cells (Yosys + ABC, typ corner), 242 717 um2 | RTL, both exact: the divider's `cnt == 0` is a registered flag (proved in `formal/clkdiv.sby`), and the instruction-memory ports read each word's next value, so no compare or bypass mux follows the 64:1 read (Yosys equivalence proof). Delay-driven ABC estimate of the slow-corner logic path 7.57 → 6.47 ns; the longest path now starts at the instruction register instead of the divider counter. Flow: `CLOCK_PERIOD` 20 (the 50 MHz fallback), design-rule and timing repair after global routing, 800 um maximum wire length, Magic DRC off (the precheck job runs the PDK's KLayout SG13CMOS5L deck, the DRC Tiny Tapeout signs off on for IHP). GDS result: next row when it lands. |
+| 2026-11-20 | Timing fixes and 50 MHz, GDS (144966f) | 21 201 cells after place and route: 2 201 flip-flops, 4 846 buffers, 2 261 hold delay cells | **All green: `gds`, `precheck`, `gl_test`, `viewer`.** Build 30 min (the first two-engine run took 4 h 46 min); detailed routing 18 min, from 10 927 violations after the first pass to zero after the sixth; precheck 62 min; gate-level tests on the routed netlist 18 min. Global routing: Metal2 39 %, Metal3 46 %, Metal4 3 %, no overflow (first two-engine run: Metal3 79.7 % with 14 446 overflow); 1.95 m of global wire, 1.54 m after detailed routing. Placement-based timing after CTS: no setup violation; 2 028 hold endpoints fixed with 2 261 delay cells; the timing repair after global routing found no setup or hold violation left. Routed STA: setup and hold met in all corners, worst reg-to-reg setup slack under 1 ns slow, about 8 ns typical; 0 max-cap, 6 max-slew violations (slow corner). LVS, antenna (after 47 diodes) and illegal-overlap checks clean. IR drop 0.02 %, 8.1 mW typical. The log cuts the slack columns at one digit; exact values are in the run's `GDS_logs` artifact. |
+| 2026-11-20 | Timing fixes on the two-engine design | 14 922 IHP cells (Yosys + ABC, typ corner), 242 717 um2 | RTL, both exact: the divider's `cnt == 0` is a registered flag (proved in `formal/clkdiv.sby`), and the instruction-memory ports read each word's next value, so no compare or bypass mux follows the 64:1 read (Yosys equivalence proof). Delay-driven ABC estimate of the slow-corner logic path 7.57 → 6.47 ns; the longest path now starts at the instruction register instead of the divider counter. Flow: `CLOCK_PERIOD` 20 (the 50 MHz fallback), design-rule and timing repair after global routing, 800 um maximum wire length, Magic DRC off (the precheck job runs the PDK's KLayout SG13CMOS5L deck, the DRC Tiny Tapeout signs off on for IHP). GDS result in the row above. |
 | 2026-11-19 | Two engines, first GDS (297df42) | 24 076 instances after place and route, 2 199 flip-flops, 2 159 hold-fix delay cells | **Routed; failed setup at 60 MHz.** 4 h 46 min. Global routing: Metal2 70.2 %, Metal3 79.7 % with 14 446 overflow (Metal3 is the only horizontal signal layer), Metal4 29.7 %; 3.95 m of global wire, 2.81 m after detailed routing. Detailed routing took 3 h 23 min from 37 679 violations after the first pass to zero. Magic DRC (59 min), LVS and antenna clean; no hold violation in any corner. Setup: the placement-based timing after CTS showed none, the routed design failed in the slow and typical corners (typical: 12 endpoints) and passed in the fast corner (reg-to-reg worst slack about +4 ns); max-slew and max-cap violations in all corners. The log's timing table is cut at 80 columns, so the exact slacks are only in the run's `GDS_logs` artifact. |
 | 2026-11-19 | Two engines, IMEM without host read port, `PL_TARGET_DENSITY_PCT` 40 | 15 288 IHP cells (Yosys + ABC, typ corner) | Area 230 944 um2 (57 % of the four-engine design), about 30 % of the core. ABC critical-path estimate 8.67 ns at the slow corner without wire load (target 16.67 ns). |
 | 2026-11-17 | Four engines, full GDS attempts (793167b, a1e294a, ab202af) | n/a | **Did not route.** All three `gds` runs were cancelled at GitHub's 6-hour limit. Synthesis to post-CTS resizing took 6 minutes; global placement already reported 20–45 % of routing tiles overflowed at 50 % utilisation; global routing took 48 min and ended with congestion; detailed routing had 296 679 violations after its first pass (3 h) and 348 317 partway through the second. Cause: wiring demand of the mux-heavy design (five 64:1 x 16 read ports on 1024 IMEM bits, four engines) far above what Metal2–Metal4 offer. |

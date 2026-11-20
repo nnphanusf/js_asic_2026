@@ -3,7 +3,87 @@
 Deadline 2027-01-18 (RTL freeze 2027-01-08). See `PLAN.md` for the full brief. This file is the running log:
 what is done, what is next, and every decision with its reason.
 
-## Status (2026-11-20)
+## Final report (2026-11-20)
+
+**Status: ready to submit.** On 144966f every workflow is green: `gds`, `precheck`, `gl_test` and `viewer` (the
+Tiny Tapeout hardening), plus `test`, `lockstep`, `formal` and `docs`. The commits after it change only
+documentation, so their `gds` runs harden the same RTL and configuration again.
+
+**What was built.** Bitweaver, `tt_um_nnphanusf_bitweaver`, 8x4 tiles on IHP SG13CMOS5L at 50 MHz:
+- two programmable bit-banging engines sharing a 64 x 16-bit instruction memory;
+- a PIO-class ISA, extended with a timed WAIT, a bit-level assist unit (NRZI, bit stuffing, Manchester,
+  programmable CRC), open-drain pads, input glitch filters, a timestamp source, and FIFO joining and chaining;
+- a register-mapped SPI host port with an interrupt line.
+
+The software and docs around it:
+- the toolchain in `sw/bitweaver`: the register map as the single source of truth, an assembler, a loader, and a
+  cycle-accurate simulator, which is the reference model;
+- a MicroPython driver for the demo board;
+- 18 protocol programs;
+- the documentation in `docs/`.
+
+**Hardening (144966f, LibreLane via `tt-gds-action`).**
+- 21 201 standard cells after place and route: 2 201 flip-flops, 4 846 buffers and 2 261 hold delay cells.
+  Placement utilisation is 24.8 %.
+- Routing: Metal3 at 46 % with no overflow; 1.54 m of wire; zero routing violations.
+- Timing at 50 MHz: met in all three corners. The worst register-to-register setup slack is under 1 ns in the
+  slow corner and about 8 ns typical. There are no hold or max-cap violations and 6 max-slew warnings in the
+  slow corner.
+- Checks: LVS, antenna and the illegal-overlap check are clean. Precheck passes, including the KLayout
+  SG13CMOS5L DRC.
+- Power: about 8.1 mW typical.
+- Run times: build 30 min, precheck 62 min.
+
+Full numbers are in `docs/results.md`.
+
+**Verification.**
+- pytest: 77 tests.
+- cocotb: 56 tests, all in cycle-by-cycle lock-step with the simulator. The same 56 pass on the routed netlist in
+  CI and on the local Yosys/IHP netlist.
+- Constrained-random lock-step (Verilator): 100M cycles over 1000 seeds with no mismatch; CI runs 10M cycles on
+  every push.
+- Coverage: functional 465/465 bins, line 100 % (285/285), toggle 98.3 % (8444/8590). The 146 untoggled points
+  are all constant bits, listed in `docs/verification.md`.
+- Formal: five SymbiYosys jobs pass in CI: the FIFO, the host port (no deadlock), engine invariants, the clock
+  divider and open-drain safety. All five are unbounded proofs (PDR, or k-induction for open drain).
+- Equivalence: a Yosys proof for the instruction-memory timing rewrite.
+
+**Protocols working**, each checked against an independent model of the other end:
+- UART at 9600–921600 baud, 8N1 and 8E1;
+- SPI controller, modes 0–3; SPI target;
+- I2C controller at 100 and 400 kHz, with every timing limit checked; I2C target on two engines;
+- WS2812, JTAG, SWD and PS/2;
+- CAN 2.0A at 500 kbit/s and 1 Mbit/s;
+- low-speed USB packets;
+- 1-Wire;
+- SPI and I2C on both engines at once.
+
+The simulations run at 60 MHz. At the 50 MHz sign-off clock the programs are unchanged and every rate limit scales
+by 5/6. Low-speed USB has exact bit timing only at 60 MHz.
+
+**Cut**, with reasons in the decisions below:
+- two of the four engines, and the instruction memory's host read port: the four-engine design did not route;
+- 10BASE-T: the host port's bandwidth is below the line rate;
+- 60 MHz, replaced by the planned 50 MHz fallback.
+
+**Known limits.**
+- Low-speed USB bit edges move by up to one clock at 50 MHz.
+- CAN has no arbitration or error frames.
+- USB works at the packet level only, not as a device stack.
+- Jump targets must be in the first 32 instructions of a program.
+- The slow-corner setup margin is under 1 ns.
+- No silicon has been tested.
+
+**Steps left for you.**
+1. Merge `phase0-setup` into `main`.
+2. Keep the repository public (it is public now).
+3. Submit through the Jane Street form when it is posted, using the green `gds` run. The deadline is 2027-01-18
+   and the RTL freeze is 2027-01-08.
+4. Optional: every push re-runs `gds`, now about 1.5 h with precheck; add `paths-ignore` for doc-only pushes if you
+   want.
+5. Optional: the exact slack values are only in the `GDS_logs` artifact (it needs a GitHub login to download).
+
+## Timing closure (2026-11-20)
 
 **The two-engine design routes; its first run missed setup at 60 MHz.** The `gds` run of 297df42 finished in
 4 h 46 min: detailed routing reached zero violations after 3 h 23 min; Magic DRC, LVS and antenna checks are
@@ -35,13 +115,20 @@ two-cycle loop); Verilator lock-step 1000 seeds, 100M cycles, no mismatch; funct
 (clkdiv, FIFO, host port, open drain, engine with the 7-minute PDR proof); gate level 56/56 on the Yosys/IHP
 netlist; synthesis 14 922 cells, 242 717 um2.
 
-**Open.** The `gds` run of this commit: `gds`, `precheck`, `gl_test` and `viewer` must be green. If setup still
-fails at 50 MHz, first read the per-corner STA reports in its `GDS_logs` artifact
-(`runs/wokwi/*-openroad-stapostpnr/*/max.rpt`); then the options are PLAN's one-stage fetch pipeline (with the
-simulator changed to match) or the next area cut, IMEM depth 32 (the I2C target pair and the SPI + I2C demo
-would no longer fit).
+**Result.** The `gds` run of 144966f is green: `gds` 30 min, `precheck` 62 min, `gl_test` 56/56 and `viewer`
+all pass. Global routing left Metal3 at 46 % with no overflow, and detailed routing reached zero violations in
+18 min. The routed design meets 50 MHz in all corners (numbers in the final report above and in
+`docs/results.md`).
 
-## Status (2026-11-19)
+**Latch warning left in place (decision).** The GDS summary shows Yosys "latch inferred" warnings for `bi`, the
+integer loop variable of the `MOV` bit reverse in `bw_sm`. Nothing reads it, so it is removed, and the netlist has
+no latch cells. A loop-free rewrite was proved equivalent (Yosys `equiv_induct`, 1960 of 1960). The cocotb suite,
+all five formal jobs and the 100M-cycle lock-step all passed on it, but it was not adopted. It changes the mapped
+netlist (14 975 cells instead of 14 922; ABC's slow-corner estimate moves by −0.45 ns with one script and
++0.09 ns with the other). With under 1 ns of routed slow-corner slack, a cosmetic warning does not justify
+re-rolling place and route on a signed-off design.
+
+## Routing (2026-11-19)
 
 **The four-engine design did not route; the chip is now two engines.** All three `gds` runs of the four-engine
 RTL (793167b, a1e294a, ab202af) were cancelled at GitHub's 6-hour job limit. The raw log of ab202af shows why:
@@ -55,45 +142,11 @@ signals only Metal2–Metal4, and the design was dominated by wide multiplexers 
 - `PL_TARGET_DENSITY_PCT` 60 → 40 to spread placement.
 Result: 15 288 IHP cells, 230 944 um2 (57 % of before), about 30 % utilisation; ABC slow-corner estimate 8.67 ns.
 
-**What was built.** Bitweaver, `tt_um_nnphanusf_bitweaver`, 8x4 tiles on IHP SG13CMOS5L at 60 MHz: two
-programmable bit-banging engines sharing a 64 x 16-bit instruction memory, a PIO-class ISA extended with a timed
-WAIT, a bit-level assist unit (NRZI, bit stuffing, Manchester, programmable CRC), open-drain pads, input glitch
-filters, a timestamp source, FIFO joining and chaining, and a register-mapped SPI host port. Toolchain in
-`sw/bitweaver` (register map as single source of truth, assembler, loader, cycle-accurate simulator), a MicroPython
-driver for the demo board, 18 protocol programs and the documentation set in `docs/`.
-
-**Protocols working** (each against an independent model of the other end): UART 9600–921600 baud 8N1/8E1, SPI
-controller modes 0–3 up to 7.5 MHz, SPI target, I2C controller at 100 and 400 kHz with every timing limit checked,
-I2C target (two engines), WS2812, JTAG, SWD, PS/2, CAN 2.0A at 500 kbit/s and 1 Mbit/s, low-speed USB packets,
-1-Wire, and SPI + I2C on both engines at once.
-
-**Verification of the two-engine RTL.**
-- pytest: 77 tests. cocotb: 53 tests, all in cycle-by-cycle lock-step with the simulator, all passing.
-- Constrained-random lock-step (Verilator): 100M cycles over 1000 seeds, no mismatch; functional coverage
-  465/465 bins, line coverage 100 %.
-- Toggle coverage 97.8 % (all 146 missing points are constant bits, listed in `docs/verification.md`).
-- Formal: all four jobs pass in CI on 297df42 (FIFO ordering, host-port no-deadlock and engine invariants proved
-  unbounded; open drain proved); covers reached for every opcode.
-- Gate level: 53/53 cocotb tests pass on the Yosys/IHP netlist of the two-engine design.
-- CI on 297df42: `test`, `lockstep`, `formal`, `docs` green.
-
-**Cut.** Two of the four engines and the instruction-memory host read port (routing, above); 10BASE-T (host port
-bandwidth below the line rate). 1-Wire was added for the programming guide.
-
-**Open.** The `gds` run of 297df42 (two engines) decides whether the chip is buildable: `gds`, `precheck`,
-`gl_test` and `viewer` must be green. If routing still fails, the next cuts in PLAN's order are IMEM depth (32
-words) and FIFO depth.
-
-**Steps left for the human.**
-1. Once `gds`, `precheck` and `gl_test` are green, merge `phase0-setup` into `main`.
-2. Each push runs `gds`; consider whether doc-only pushes should skip it.
-3. Submit through the Jane Street form when it is posted (deadline 2027-01-18; RTL freeze 2027-01-08).
-
 ## Phase 0: Setup and spec
 - [x] Repo from `ttihp-verilog-template`; OSS CAD Suite 2026-11-16 in `~/tools/oss-cad-suite`
 - [x] IHP SG13CMOS5L liberty and cell models in `~/tools/pdk/ihp-sg13cmos5l/libs.ref` (from the IHP open PDK repo)
       for local area estimates and gate-level simulation
-- [x] `info.yaml` (8x4, 60 MHz, all source files), `docs/info.md` datasheet
+- [x] `info.yaml` (8x4, all source files; 60 MHz, 50 MHz since 2026-11-20), `docs/info.md` datasheet
 - [x] `gds` + precheck green at 8x4 / 60 MHz on the probe design (3627c90); viewer at
       https://nnphanusf.github.io/js_asic_2026/
 - [x] Spec: `sw/bitweaver/regmap.py` generates `src/bw_defs.vh` and `docs/regmap.md`; `docs/isa.md`
@@ -108,8 +161,8 @@ words) and FIFO depth.
       filters, open drain, timestamp, IRQs. Verilator `-Wall` clean.
 - [x] Lock-step cocotb testbench: every test compares all outputs with the ISS on every cycle.
 - [x] UART TX/RX against `cocotbext-uart`.
-- [ ] Full GDS + precheck + GL test green: four engines did not route (3 runs cancelled at 6 h); two-engine run
-      of 297df42 pending
+- [x] Full GDS + precheck + GL test green: four engines did not route (3 runs cancelled at 6 h); two engines
+      green on 144966f at 50 MHz
 
 ## Phase 2: Full cluster and core protocols
 - [x] Engines, FIFO join and chaining, IRQ flags, open drain, WAIT timeout, timestamp, BAU
@@ -124,11 +177,11 @@ words) and FIFO depth.
       CI runs 10M cycles over 50 seeds per push
 - [x] Formal: FIFO order/no overflow (proved), host SPI no deadlock (proved), engine invariants incl. PC within the
       wrap range (proved), open drain never drives high (proved), covers for every opcode
-- [x] Coverage: functional 465/465 bins, Verilator line 100 %, toggle 99.1 %
-- [x] GL simulation of the full suite on the Yosys/IHP netlist locally; CI `gl_test` on the routed netlist pending
+- [x] Coverage: functional 465/465 bins, Verilator line 100 % (285/285), toggle 98.3 % (8444/8590) (two engines)
+- [x] GL simulation of the full suite on the Yosys/IHP netlist locally and on the routed netlist in CI (56/56)
 - [x] Timing, first pass: the two-engine GDS routed but missed 60 MHz (slow and typical corners); two exact RTL
       retimings, repair after global routing, 50 MHz fallback (2026-11-20)
-- [ ] Timing: `gds` green at 50 MHz
+- [x] Timing: `gds` green at 50 MHz, all corners (144966f)
 
 ## Phase 4: Stretch protocols
 - [x] WS2812, JTAG, SWD, PS/2, CAN 2.0A (TX/RX, BAU stuffing + CRC15), low-speed USB packets (TX/RX, BAU NRZI +
@@ -137,7 +190,7 @@ words) and FIFO depth.
 
 ## Phase 5: Write-up
 - [x] `architecture.md`, `isa.md`, `programming_guide.md`, `verification.md`, `results.md`, `ai_usage.md`, README
-- [ ] Final numbers from the full-design GDS run into `results.md`
+- [x] Final numbers from the full-design GDS run into `results.md`
 
 ## Decisions
 - **Reset:** asynchronous assert, synchronous release through a 2-FF synchronizer. IHP has no flip-flop without a

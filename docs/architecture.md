@@ -209,8 +209,11 @@ register. Two exact changes shortened it without changing behaviour on any cycle
 The layout matters more than the logic. Metal3 is the only horizontal signal layer in a Tiny Tapeout IHP tile,
 and global routing left it at 80 % use with overflow, so routed wires detour far from what placement estimated:
 in the first two-engine run the placement-based timing after clock-tree synthesis showed no setup violation at
-60 MHz, but the routed design missed 60 MHz in the slow and typical corners. The flow therefore repairs design rules and timing again after global routing, buffers long
-wires, and signs off at 50 MHz, the plan's fallback and the Tiny Tapeout IHP default.
+60 MHz, but the routed design missed 60 MHz in the slow and typical corners. The flow therefore repairs design
+rules and timing again after global routing, buffers long wires, and signs off at 50 MHz, the plan's fallback and
+the Tiny Tapeout IHP default. With these changes global routing left Metal3 at 46 % with no overflow, and the
+routed design meets 50 MHz in all three corners: the worst register-to-register setup slack is under 1 ns in the
+slow corner and about 8 ns in the typical corner ([results.md](results.md)).
 
 ## Design decisions
 
