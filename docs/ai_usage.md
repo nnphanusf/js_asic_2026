@@ -18,6 +18,8 @@ work was checked by tools rather than taken on trust.
   documentation, working from the brief.
 - Ran the local tools (Icarus Verilog, Verilator, Yosys, SymbiYosys, cocotb) and read the results of the GitHub
   Actions runs, and fixed what they reported.
+- Diagnosed the failed hardening runs from the LibreLane logs and chose the fixes: cutting to two engines (PLAN's
+  cut order), the timing changes in the RTL and flow settings, and the 50 MHz clock (PLAN's fallback).
 - Kept `PROGRESS.md` as a running log of decisions and their reasons.
 
 Models used: Claude Fable 5.2 wrote the register map, instruction-set simulator, assembler, loader and the
@@ -40,7 +42,8 @@ The agent's output was treated as unverified until a tool agreed with it:
   itself is right, which is why the next check exists.
 - **Independent protocol models.** Protocol programs are judged by third-party models (`cocotbext-uart`,
   `cocotbext-spi`) or by models written separately from the firmware, never only by the simulator.
-- **Formal proofs** (SymbiYosys) for the FIFO, the host port and open-drain safety.
+- **Formal proofs** (SymbiYosys) for the FIFO, the host port, engine invariants, the clock divider and open-drain
+  safety, and a Yosys equivalence proof for the instruction-memory timing change.
 - **The Tiny Tapeout flow** (LibreLane hardening, precheck, gate-level simulation of the routed netlist) and static
   timing analysis decide whether the chip is buildable; the agent's area and timing estimates are only estimates.
 

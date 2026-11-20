@@ -3,6 +3,44 @@
 Deadline 2027-01-18 (RTL freeze 2027-01-08). See `PLAN.md` for the full brief. This file is the running log:
 what is done, what is next, and every decision with its reason.
 
+## Status (2026-11-20)
+
+**The two-engine design routes; its first run missed setup at 60 MHz.** The `gds` run of 297df42 finished in
+4 h 46 min: detailed routing reached zero violations after 3 h 23 min; Magic DRC, LVS and antenna checks are
+clean, with no hold violation in any corner. Setup failed in the slow and typical corners (typical: 12
+endpoints) and passed in the fast corner (reg-to-reg worst slack about +4 ns). The placement-based timing after
+clock-tree synthesis had shown no setup violation, so most of the loss came from routing: Metal3, the only
+horizontal signal layer, ended global routing at 79.7 % with 14 446 overflow, and the log reports max-slew and
+max-cap violations in every corner after routing. The job log truncates the slack columns of the timing table,
+so the exact slacks are only in that run's `GDS_logs` artifact (downloading it needs a GitHub login).
+
+**Fixes, following PLAN ("fix critical paths ... confirm 60 MHz or fall back to 50").**
+- RTL, exact retimings (no cycle changes): the clock divider's `cnt == 0` is now a registered flag, so an
+  engine's tick comes from a flip-flop (proved equal to the counter, `formal/clkdiv.sby`); the instruction-memory
+  ports read each word's next value, so no compare or bypass mux follows the 64:1 read (proved equivalent to the
+  previous memory with Yosys `equiv_induct`). Delay-driven ABC estimate of the slow-corner logic path 7.57 →
+  6.47 ns.
+- Flow (`src/config.json`): `CLOCK_PERIOD` 20 (50 MHz, PLAN's fallback and the Tiny Tapeout IHP default);
+  design-rule repair and timing repair after global routing, against the routed parasitics; buffers on wires
+  longer than 800 um; Magic DRC off, because it took 59 minutes of the 6-hour job and repeats the check the
+  precheck job makes with the PDK's KLayout SG13CMOS5L deck (Tiny Tapeout's precheck runs Magic DRC only for
+  sky130).
+- Docs and `info.yaml` now say 50 MHz. Simulations still run at 60 MHz: engines count cycles, the programs are
+  unchanged, and the timing helpers take the clock as `f_clk`.
+
+**Verification of this state.** pytest 77 passed; cocotb 56/56 in lock-step (new: divider integer part 1 and 2
+with fractional carries, integer part 0 over 65 536 cycles, host rewrites landing on every fetch phase of a
+two-cycle loop); Verilator lock-step 1000 seeds, 100M cycles, no mismatch; functional coverage 465/465, line
+100 % (285/285), toggle 98.3 % (8444/8590, the same 146 constant bits as before); formal: all five jobs pass
+(clkdiv, FIFO, host port, open drain, engine with the 7-minute PDR proof); gate level 56/56 on the Yosys/IHP
+netlist; synthesis 14 922 cells, 242 717 um2.
+
+**Open.** The `gds` run of this commit: `gds`, `precheck`, `gl_test` and `viewer` must be green. If setup still
+fails at 50 MHz, first read the per-corner STA reports in its `GDS_logs` artifact
+(`runs/wokwi/*-openroad-stapostpnr/*/max.rpt`); then the options are PLAN's one-stage fetch pipeline (with the
+simulator changed to match) or the next area cut, IMEM depth 32 (the I2C target pair and the SPI + I2C demo
+would no longer fit).
+
 ## Status (2026-11-19)
 
 **The four-engine design did not route; the chip is now two engines.** All three `gds` runs of the four-engine
@@ -88,7 +126,9 @@ words) and FIFO depth.
       wrap range (proved), open drain never drives high (proved), covers for every opcode
 - [x] Coverage: functional 465/465 bins, Verilator line 100 %, toggle 99.1 %
 - [x] GL simulation of the full suite on the Yosys/IHP netlist locally; CI `gl_test` on the routed netlist pending
-- [ ] Timing: read LibreLane STA for the full design (ABC estimate 9.1 ns at the slow corner, budget 16.7 ns)
+- [x] Timing, first pass: the two-engine GDS routed but missed 60 MHz (slow and typical corners); two exact RTL
+      retimings, repair after global routing, 50 MHz fallback (2026-11-20)
+- [ ] Timing: `gds` green at 50 MHz
 
 ## Phase 4: Stretch protocols
 - [x] WS2812, JTAG, SWD, PS/2, CAN 2.0A (TX/RX, BAU stuffing + CRC15), low-speed USB packets (TX/RX, BAU NRZI +
@@ -107,6 +147,14 @@ words) and FIFO depth.
   because the design is mostly wide multiplexers and a TT tile only has Metal2–Metal4 for signals. Cut to two
   engines and removed the IMEM host read port (15.3K cells). The earlier reasoning that 39 % utilisation "leaves
   far more than 25 % headroom" was wrong for this kind of logic.
+- **Clock (2026-11-20): 50 MHz sign-off.** The routed two-engine design missed 60 MHz in the slow and typical
+  corners. PLAN names 50 MHz as the fallback and it is the Tiny Tapeout IHP template default. RTL and programs are
+  unchanged (engines count cycles); simulations stay at 60 MHz, and the timing helpers take `f_clk`. Low-speed
+  USB is exact only at 60 MHz (40 clocks per bit); at 50 MHz the fractional divider moves bit edges by one clock.
+- **Flow settings beyond the template (2026-11-20):** repair after global routing (`RUN_POST_GRT_DESIGN_REPAIR`,
+  `RUN_POST_GRT_RESIZER_TIMING`, LibreLane marks both experimental), 800 um maximum wire length, and
+  `RUN_MAGIC_DRC` off to keep the run inside GitHub's 6-hour limit; DRC sign-off stays with the precheck job's
+  KLayout SG13CMOS5L deck.
 - **Includes:** RTL files `` `include "bw_defs.vh" ``; LibreLane's linter and Yosys resolve includes relative to
   the including file, so local lint needs `--relative-includes`.
 - **Instruction fetch:** IR is loaded at the end of each cycle from memory[next PC] (write-first), so there is no

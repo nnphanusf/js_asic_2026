@@ -21,7 +21,8 @@ You need Python 3.10+ (for the assembler and simulator) and, for the RTL tests, 
 | Read | low for ≥1 us, release, sample before 15 us | holds the line low to send a 0 |
 
 Two observations make the program small: a **read slot is a write-1 slot**, and everything is slow, so a
-**1 µs tick** is plenty. At 60 MHz that is `clkdiv 60`.
+**1 µs tick** is plenty. At 60 MHz (the simulation clock) that is `clkdiv 60`; at the chip's 50 MHz sign-off
+clock, load it with `clkdiv=50`.
 
 ## 2. Choose pins, tick and host interface
 

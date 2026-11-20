@@ -16,8 +16,23 @@
   "PL_TARGET_DENSITY_PCT": 40,
 
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
-  "//": "The value is in nanoseconds, so 20ns == 50MHz. Bitweaver targets 60 MHz (16.667 ns).",
-  "CLOCK_PERIOD": 16.667,
+  "//": "The value is in nanoseconds, so 20ns == 50MHz. Bitweaver was constrained at 60 MHz (16.667 ns)",
+  "//": "first; after routing the slow and typical corners missed it, so it signs off at the planned",
+  "//": "50 MHz fallback, which is also the Tiny Tapeout IHP default.",
+  "CLOCK_PERIOD": 20,
+
+  "//": "Bitweaver: Metal3 is the only horizontal routing layer here and runs near capacity, so routed",
+  "//": "wires detour far from the placement estimate. Repair design rules and timing again after global",
+  "//": "routing, against the routed parasitics, and buffer wires longer than 800 um.",
+  "RUN_POST_GRT_DESIGN_REPAIR": true,
+  "RUN_POST_GRT_RESIZER_TIMING": true,
+  "DESIGN_REPAIR_MAX_WIRE_LENGTH": 800,
+  "GRT_DESIGN_REPAIR_MAX_WIRE_LENGTH": 800,
+
+  "//": "Bitweaver: the routed design takes about 3.5 h of the 6 h CI limit. Magic DRC took another hour",
+  "//": "and repeats a check the precheck job makes with the PDK's own KLayout SG13CMOS5L DRC deck,",
+  "//": "which is the DRC Tiny Tapeout signs off on for IHP (precheck runs Magic DRC for sky130 only).",
+  "RUN_MAGIC_DRC": false,
 
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,

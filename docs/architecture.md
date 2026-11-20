@@ -1,6 +1,6 @@
 # Bitweaver architecture
 
-Bitweaver is a programmable protocol emulator for Tiny Tapeout (IHP SG13CMOS5L, 8x4 tiles, 60 MHz). It has no
+Bitweaver is a programmable protocol emulator for Tiny Tapeout (IHP SG13CMOS5L, 8x4 tiles, 50 MHz). It has no
 UART, SPI or I2C hardware. Two small engines execute bit-banging programs with exact cycle timing, and a few
 generic helpers (open-drain pads, a timed WAIT, a bit-level assist unit, a timestamp, FIFO chaining) make protocols
 that would otherwise need dedicated hardware possible in firmware.
@@ -192,6 +192,25 @@ overflowed in 20 to 45 % of the routing tiles, and detailed routing still had ab
 first pass when GitHub stopped the job at 6 hours. Two engines and three fewer read ports halve the area and
 remove most of the wiring hot spot. Every protocol in `sw/programs` still fits: none needs more than two
 engines.
+
+### Timing
+
+An engine fetches its next instruction in the same cycle it decides where to go, so that jumps, wraps and skips
+cost no extra cycle. The longest path is therefore: instruction register, decode and condition, next PC (for
+`OUT PC` / `MOV PC` through the OSR shifter), the 64:1 instruction-memory read, and back into the instruction
+register. Two exact changes shortened it without changing behaviour on any cycle:
+
+* the clock divider keeps a registered copy of `cnt == 0`, so an engine's tick comes straight from a flip-flop
+  instead of from a 16-bit zero detect (proved equal to the counter in `formal/clkdiv.sby`);
+* the instruction-memory ports read each word's next value (its flip-flop's D input), which is the write-first
+  value by construction, so no address compare or bypass mux follows the 64:1 read (proved equivalent to the
+  previous memory with Yosys `equiv_induct`).
+
+The layout matters more than the logic. Metal3 is the only horizontal signal layer in a Tiny Tapeout IHP tile,
+and global routing left it at 80 % use with overflow, so routed wires detour far from what placement estimated:
+in the first two-engine run the placement-based timing after clock-tree synthesis showed no setup violation at
+60 MHz, but the routed design missed 60 MHz in the slow and typical corners. The flow therefore repairs design rules and timing again after global routing, buffers long
+wires, and signs off at 50 MHz, the plan's fallback and the Tiny Tapeout IHP default.
 
 ## Design decisions
 

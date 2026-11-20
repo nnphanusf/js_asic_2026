@@ -2,7 +2,7 @@
 
 # Bitweaver: a programmable protocol emulator
 
-Bitweaver is a Tiny Tapeout chip (IHP SG13CMOS5L, 8x4 tiles, 60 MHz) with no fixed UART, SPI or I2C hardware.
+Bitweaver is a Tiny Tapeout chip (IHP SG13CMOS5L, 8x4 tiles, 50 MHz) with no fixed UART, SPI or I2C hardware.
 Two small engines run bit-banging programs with exact cycle timing, and a handful of generic primitives
 (open-drain pads, a WAIT with timeout, a bit-level assist unit for NRZI, Manchester, bit stuffing and CRCs, a
 timestamp, FIFO chaining) let firmware speak protocols the chip was never designed around.
@@ -18,7 +18,7 @@ timestamp, FIFO chaining) let firmware speak protocols the chip was never design
 
 ![Both engines running SPI and JTAG at the same time](docs/images/two_protocols.svg)
 
-*Two engines, two protocols, one 60 MHz clock: an SPI frame and a JTAG IR scan (rendered from the cycle-accurate
+*Two engines, two protocols, one clock (60 MHz in simulation): an SPI frame and a JTAG IR scan (rendered from the cycle-accurate
 simulator by `scripts/wave_svg.py`; the RTL matches it on every cycle).*
 
 ## Documentation
