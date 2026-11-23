@@ -30,7 +30,7 @@ simulator by `scripts/wave_svg.py`; the RTL matches it on every cycle).*
   coverage, independent protocol models
 * [Results](docs/results.md): area, timing, protocol speeds
 * [Datasheet page](docs/info.md) for the Tiny Tapeout shuttle
-* [How AI was used](docs/ai_usage.md)
+* [AI use](docs/ai_usage.md)
 
 ## Repository
 
