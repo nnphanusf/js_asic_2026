@@ -4,7 +4,7 @@
 ; (bit 1 = TMS, bit 0 = TDI). For every eight cycles the RX FIFO receives the eight TDO bits sampled at
 ; the rising edges, first cycle in bit 8 (read the word >> 8). bitweaver.proto.JtagSeq builds the words
 ; from TAP operations and decodes the results.
-; A cycle takes 4 ticks: TCK = f_clk / (4 * clkdiv), up to 7.5 MHz at clkdiv 2.
+; A cycle takes 4 ticks: TCK = f_clk / (4 * clkdiv), up to 6.25 MHz at clkdiv 2 and 50 MHz.
 ; Default pins: TCK = PIN5, TDI = PIN6, TMS = PIN7 (uo_out[0..2]), TDO = PIN0 (ui_in[0]).
 
 .program jtag

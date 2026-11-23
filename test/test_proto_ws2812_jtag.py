@@ -14,7 +14,7 @@ from cocotb.utils import get_sim_time
 
 from bitweaver.asm import load_program
 from bitweaver.proto import JtagSeq, ws2812_words
-from bwtb import TB
+from bwtb import F_CLK, TB
 
 
 # ----------------------------------------------------------------------------- WS2812
@@ -72,7 +72,7 @@ async def test_ws2812(dut):
     tb = TB(dut)
     await tb.start()
     dec = Ws2812Decoder(dut.pad5)
-    await tb.load(load_program("ws2812"), 0)
+    await tb.load(load_program("ws2812", F_CLK=F_CLK), 0)
     await tb.enable(1)
     frames = [[(255, 0, 0), (0, 255, 0), (0, 0, 255), (0x12, 0x34, 0x56)],
               [(1, 2, 3), (0x80, 0x7F, 0xAA), (0, 0, 0), (255, 255, 255), (0x5A, 0xA5, 0x3C)]]

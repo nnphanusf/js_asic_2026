@@ -1,9 +1,10 @@
 ; WS2812 ("NeoPixel") LED driver.
 ;
-; Each bit is 10 ticks: a 1 is high for 7 ticks, a 0 is high for 3 ticks. At clkdiv 7 a tick is
-; 116.7 ns, so a bit is 1.17 us (857 kHz), T0H = 350 ns and T1H = 817 ns, inside the WS2812B limits
-; (T0H 220..380 ns, T1H 580..1000 ns, bit 1.25 +- 0.6 us). An integer divider keeps every pulse
-; exactly the same length; 7.5 would give 800 kHz but 367/383 ns T0H pulses.
+; Each bit is 10 ticks: a 1 is high for 7 ticks, a 0 is high for 3 ticks. The divider is the clock
+; divided by 8 MHz, rounded down, so a tick is at most 125 ns: at 50 MHz clkdiv 6 gives 120 ns,
+; a bit of 1.2 us (833 kHz), T0H = 360 ns and T1H = 840 ns; at 60 MHz clkdiv 7 gives 116.7 ns,
+; T0H = 350 ns and T1H = 817 ns. Both are inside the WS2812B limits (T0H 220..380 ns,
+; T1H 580..1000 ns, bit 1.25 +- 0.6 us). An integer divider keeps every pulse exactly the same length.
 ; Pixels are streamed MSB first, 24 bits each in G, R, B order, packed into 16-bit FIFO words (see
 ; bitweaver.proto.ws2812_words). When the TX FIFO runs dry the line stays low, which latches the
 ; pixels after 50 us (the "reset" time).
@@ -14,7 +15,7 @@
 .pins side=5 set=5 set_count=1
 .shift out=left autopull=16
 .fifo join_tx
-.clkdiv 7
+.clkdiv (F_CLK - F_CLK % 8000000) / 8000000   ; F_CLK / 8 MHz rounded down: 6 at 50 MHz, 7 at 60
 .init set pindirs, 1
 .wrap_target
 bitloop:

@@ -5,7 +5,8 @@
 ; pushed as one word; bitweaver.proto.ps2_decode checks it: frame = word >> 5.
 ; The glitch filter is on for both lines. A timed WAIT acts as a frame watchdog: if CLK stops for
 ; TMO ticks in the middle of a frame, the partial frame is dropped and the receiver resynchronizes.
-; At clkdiv 4 a tick is 67 ns; TMO 3000 is 200 us, more than two bit times.
+; At clkdiv 4 a tick is 80 ns at 50 MHz (67 ns at 60 MHz); TMO 3000 is 240 us (200 us), more than
+; two bit times either way.
 ; Default pins: DATA = PIN15 (uio[4]), CLK = PIN16 (uio[5]).
 
 .program ps2_rx

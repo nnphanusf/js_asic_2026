@@ -311,18 +311,24 @@ class FastDriver(Driver):
 
 
 class SpiDriver(Driver):
-    """Drives the simulator through its SPI pins, one clock cycle at a time."""
+    """Drives the simulator through its SPI pins, one clock cycle at a time.
 
-    def __init__(self, bench: Bench, half: int = 4):
+    `half` is the SCK half period in clock cycles. `miso_delay` models the pads, the Tiny Tapeout
+    multiplexer and SCK's phase against the chip clock: the host sees MISO that many cycles late.
+    Reads need half > miso_delay + 3; real hardware should use half >= 8 (SCK at most clk/16).
+    """
+
+    def __init__(self, bench: Bench, half: int = 4, miso_delay: int = 0):
         super().__init__()
         self.b = bench
         self.half = half
+        self.miso_delay = miso_delay
         self.first_bytes = (0, 0)  # the ID and status bytes seen in the last frame
 
     def _frame(self, data: bytes) -> bytes:
         wave, samples = spi_wave(data, self.half)
         bits = []
-        want = set(samples)
+        want = {s - self.miso_delay for s in samples}
         for i, (cs_n, sck, mosi) in enumerate(wave):
             if i in want:
                 bits.append(self.b.miso)
@@ -371,10 +377,13 @@ def main() -> None:
     ap.add_argument("--sm", type=int, default=0)
     ap.add_argument("--origin", type=int, default=0)
     ap.add_argument("--clkdiv", type=float)
+    ap.add_argument("--f-clk", type=float, default=R.F_CLK,
+                    help="chip clock in Hz for programs whose divider depends on it (default %(default)g)")
     ap.add_argument("-D", "--define", action="append", default=[], help="NAME=VALUE for the assembler")
     ap.add_argument("-o", "--output", required=True)
     args = ap.parse_args()
-    defines = {k: int(v, 0) for k, v in (d.split("=", 1) for d in args.define)}
+    defines = {"F_CLK": int(args.f_clk)}
+    defines.update({k: int(v, 0) for k, v in (d.split("=", 1) for d in args.define)})
     overrides = {"clkdiv": args.clkdiv} if args.clkdiv else {}
     image = build_image(args.source, args.program, args.sm, args.origin, defines, **overrides)
     with open(args.output, "w") as fh:

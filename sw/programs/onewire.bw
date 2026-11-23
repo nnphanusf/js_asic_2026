@@ -1,8 +1,9 @@
 ; Dallas/Maxim 1-Wire bus master, standard speed. This is the program written step by step in
 ; docs/programming_guide.md.
 ;
-; One open-drain pin (default PIN17 = uio[6]) with an external pull-up. clkdiv 60 makes a tick 1 us,
-; so every delay below is in microseconds.
+; One open-drain pin (default PIN17 = uio[6]) with an external pull-up. The divider makes a tick 1 us
+; (clkdiv 50 at 50 MHz, 60 at 60 MHz), so every delay below is in microseconds. The read sample at
+; 15 us is the latest the standard allows, so the divider must follow the real clock.
 ; Host protocol, one word per operation:
 ;   0x0000           reset pulse; pushes 0 if a device answered with a presence pulse, 1 if not
 ;   0x0100 | byte    exchange one byte, LSB first; pushes the byte read back in bits 15:8.
@@ -11,7 +12,7 @@
 .program onewire
 .pins out=17 out_count=1 set=17 set_count=1 in=17 dirs=17 high=17 od=17
 .shift out=right in=right
-.clkdiv 60
+.clkdiv F_CLK / 1000000      ; 1 us ticks
 .timeout 240                  ; presence pulse must start within 15 + 240 us of the release
 .wrap_target
 cmd:

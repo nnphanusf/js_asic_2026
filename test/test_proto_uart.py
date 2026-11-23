@@ -13,9 +13,8 @@ from cocotbext.uart import UartSink, UartSource
 
 from bitweaver import regmap as R
 from bitweaver.asm import load_program
-from bwtb import TB, GL
+from bwtb import F_CLK, GL, TB
 
-F_CLK = 60e6
 TX_PIN, RX_PIN = 9, 3
 
 

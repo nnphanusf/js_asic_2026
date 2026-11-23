@@ -12,7 +12,7 @@ from cocotbext.spi import SpiBus, SpiConfig
 
 from bitweaver.asm import load_program
 from bitweaver.proto import i2c_read_cmds, i2c_result, i2c_timing, i2c_write_cmds, spi_frame
-from bwtb import TB
+from bwtb import F_CLK, TB
 from i2c_bfm import FAST, I2cMonitor, I2cTarget, Line
 from spi_models import StreamTarget
 
@@ -23,7 +23,7 @@ async def test_two_protocols_concurrently(dut):
     await tb.start()
     # Pins: SPI on PIN11..14 (CS, MOSI, MISO, SCK), I2C SCL PIN15 / SDA PIN16.
     await tb.load(load_program("spi_ctrl_cpha0", file="spi"), 0, clkdiv=3)
-    i2c_div, i2c_defines = i2c_timing(400e3)
+    i2c_div, i2c_defines = i2c_timing(400e3, F_CLK)
     await tb.load(load_program("i2c_ctrl", **i2c_defines), 1, clkdiv=i2c_div, in_base=16, out_base=16, set_base=16,
                   side_base=15, dirs_pins=[15, 16], high_pins=[15, 16], od_pins=[15, 16])
     assert tb.origin == 11 + 25

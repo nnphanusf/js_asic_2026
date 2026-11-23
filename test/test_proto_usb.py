@@ -11,7 +11,7 @@ from cocotb.triggers import Timer
 
 from bitweaver.asm import load_program
 from bitweaver.proto import usb_rx_decode, usb_tx_words
-from bwtb import TB
+from bwtb import F_CLK, TB
 from usb_model import UsbLines, packet_bits
 
 PACKETS = [
@@ -29,7 +29,7 @@ async def test_usb_tx(dut):
     tb = TB(dut)
     await tb.start()
     lines = UsbLines(dut)
-    prog = load_program("usb_tx")
+    prog = load_program("usb_tx", F_CLK=F_CLK)
     await tb.load(prog, 0)
     await tb.enable(1)
     for p in PACKETS:
@@ -53,7 +53,7 @@ async def test_usb_rx(dut):
     await tb.start()
     lines = UsbLines(dut)
     await tb.load(load_program("usb_se0"), 0)
-    await tb.load(load_program("usb_rx"), 1, clkdiv=4)
+    await tb.load(load_program("usb_rx", F_CLK=F_CLK), 1)
     await tb.enable(0b11)
     for p in PACKETS:
         await lines.send(packet_bits(**p))

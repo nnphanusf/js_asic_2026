@@ -11,8 +11,10 @@
 ; I2C controller with repeated START and clock stretching.
 ; A bit takes T_LOW + T_HIGH ticks, and SCL stays high for at least T_HIGH - 1 ticks after any clock
 ; stretching ends. bitweaver.proto.i2c_timing picks the split and the divider:
-;   standard mode, 100 kHz: T_LOW 5, T_HIGH 5, clkdiv 60 (tLOW 5 us >= 4.7, tHIGH >= 4 us)
-;   fast mode, 400 kHz:     T_LOW 6, T_HIGH 4, clkdiv 15 (tLOW 1.5 us >= 1.3, tHIGH >= 0.75 us >= 0.6)
+;   standard mode, 100 kHz: T_LOW 5, T_HIGH 5, clkdiv 50 at 50 MHz, 60 at 60 MHz (tLOW 5 us >= 4.7,
+;                           tHIGH >= 4 us)
+;   fast mode, 400 kHz:     T_LOW 6, T_HIGH 4, clkdiv 13 at 50 MHz, 15 at 60 MHz (tLOW >= 1.3 us,
+;                           tHIGH >= 0.6 us)
 ; Every SCL release waits until SCL is really high, so targets can stretch the clock; inside a byte
 ; that wait is bounded by TMO ticks, after which the program raises IRQ flag 0 (relative to the
 ; engine) and waits for the host to clear it.

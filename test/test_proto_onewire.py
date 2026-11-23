@@ -8,7 +8,7 @@ Uses the open-drain pin mode and the WAIT timeout (presence detection). Lock-ste
 import cocotb
 
 from bitweaver.asm import load_program
-from bwtb import TB
+from bwtb import F_CLK, TB
 from onewire_model import OneWireDevice, crc8
 
 RESET = 0x0000
@@ -30,7 +30,7 @@ async def test_onewire(dut):
     tb = TB(dut)
     await tb.start()
     dev = OneWireDevice(dut.pad17, dut.ext17)
-    await tb.load(load_program("onewire"), 0)
+    await tb.load(load_program("onewire", F_CLK=F_CLK), 0)
     await tb.enable(1)
     # READ ROM: family code, serial number and CRC.
     res = await run(tb, [RESET, byte(0x33)] + [byte(0xFF)] * 8)

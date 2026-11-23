@@ -20,6 +20,10 @@ CHIP_ID = 0xB717
 CHIP_VERSION = 0x0100
 SPI_ID_BYTE = 0xB7  # first byte shifted out on MISO after CS_N falls
 
+# The chip's rated clock (info.yaml clock_hz). Programs and protocol helpers compute their dividers
+# from it by default; the cocotb testbench runs at 60 MHz and passes its own clock explicitly.
+F_CLK = 50_000_000
+
 NUM_SM = 2  # four engines did not route in an 8x4 tile; see PROGRESS.md
 _SMB = max(1, (NUM_SM - 1).bit_length())  # bits needed to name an engine
 IMEM_DEPTH = 64
@@ -190,7 +194,7 @@ GLOBAL_REGS = [
 # Per-engine registers. `addr` is the offset from SM_BASE + n * SM_STRIDE.
 SM_REGS = [
     Reg("CLKDIV_INT", 0x0, "RW", "Clock divider, integer part.",
-        [Field("INT", 0, 16, "Clock cycles per engine tick (0 means 65536).", 1)]),
+        [Field("INT", 0, 16, "Clock cycles per engine tick (0 means 65536, with FRAC 0 only).", 1)]),
     Reg("CLKDIV_FRAC", 0x1, "RW", "Clock divider, fractional part.",
         [Field("FRAC", 0, 8, "Extra 1/256ths of a clock cycle per tick.")]),
     Reg("WRAP", 0x2, "RW", "Program wrap addresses (absolute instruction-memory addresses).", [

@@ -13,8 +13,10 @@
  * (rd_load) and its side effect (rd_pop, e.g. a FIFO pop) fires on the first SCK rising edge of the
  * word, so a word the host never clocks is never consumed.
  *
- * Inputs must already be synchronized to clk. SCK high and low times must each be at least three
- * clock cycles (SCK <= clk/8 leaves margin).
+ * Inputs must already be synchronized to clk. MISO changes two to three cycles after the
+ * synchronized SCK falls, so the host's SCK low time must exceed three cycles plus every cycle of pad,
+ * multiplexer and phase delay (SpiDriver.miso_delay in sw/bitweaver/loader.py models it). Use
+ * SCK <= clk/16 on real hardware; clk/8 only works with ideal pads.
  */
 
 `default_nettype none

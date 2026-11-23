@@ -55,7 +55,7 @@ Engine *n* has its registers at `0x20 + 0x10 * n + offset`.
 
 | Address | Name | Access | Bits | Field | Reset | Description |
 |---|---|---|---|---|---|---|
-| `+0x0` | `CLKDIV_INT` | RW | 15:0 | `INT` | 1 | Clock divider, integer part. Clock cycles per engine tick (0 means 65536). |
+| `+0x0` | `CLKDIV_INT` | RW | 15:0 | `INT` | 1 | Clock divider, integer part. Clock cycles per engine tick (0 means 65536, with FRAC 0 only). |
 | `+0x1` | `CLKDIV_FRAC` | RW | 7:0 | `FRAC` | 0 | Clock divider, fractional part. Extra 1/256ths of a clock cycle per tick. |
 | `+0x2` | `WRAP` | RW | 5:0 | `BOTTOM` | 0 | **Program wrap addresses (absolute instruction-memory addresses).** Address executed after the instruction at TOP. |
 | | | | 13:8 | `TOP` | 0x3F | Last address of the wrap range. |

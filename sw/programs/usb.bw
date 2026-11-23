@@ -1,6 +1,7 @@
 ; Low-speed USB (1.5 Mbit/s) packet transmitter and receiver.
 ;
-; A bit is 10 ticks: clkdiv 4 gives 40 clock cycles per bit at 60 MHz. The bit-level assist unit does
+; A bit is 10 ticks: the divider is the clock / 15 MHz, so 40 clock cycles per bit at 60 MHz and a
+; fractional 33.3 at 50 MHz (bit edges then move by up to one clock). The bit-level assist unit does
 ; NRZI coding and bit stuffing (a 0 after six 1s) in both directions, and computes the CRC16 of DATA
 ; packets on transmit. Line states for low speed: J = D- high, D+ low; K = D- low, D+ high; SE0 = both
 ; low. Pins: D- = PIN11 (uio[0]), D+ = PIN12 (uio[1]); the bus needs the usual 1.5 kOhm pull-up on D-.
@@ -17,7 +18,7 @@
 ;   end of packet    jmp eop
 ; Inside every 10-tick bit the pins change at tick 3, also across segments and stuff bits.
 .pins out=DM out_count=2 set=DM set_count=2 jmp=STUFF
-.clkdiv 4
+.clkdiv F_CLK / 15000000
 .bau poly=0xA001 stuff=6 ones
 .shift out=right
 .fifo join_tx
@@ -64,7 +65,7 @@ estuff:
 ; the packet (IRQ flag 6 from usb_se0) the partial last word and the bit count are pushed.
 ; bitweaver.proto.usb_rx_decode checks SYNC, PID and CRC.
 .pins in=DM jmp=30            ; JMP PIN: IRQ flag 6 (virtual pin 30)
-.clkdiv 4
+.clkdiv F_CLK / 15000000
 .bau stuff=6 ones
 .shift in=right autopush=16
 .fifo join_rx

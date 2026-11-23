@@ -20,6 +20,9 @@ from bitweaver.iss import Bitweaver
 from bitweaver.loader import frame_bytes, load_ops, pad_masks, pinvec_ops
 
 CLK_PERIOD_PS = 16666  # 60 MHz, even picoseconds
+# The nominal simulation clock. Programs and protocol helpers default to the chip's rated 50 MHz
+# (bitweaver.regmap.F_CLK), so tests pass this explicitly wherever a divider depends on the clock.
+F_CLK = 60_000_000
 GL = os.environ.get("GATES") == "yes"
 UIO_NAMES = [f"ext{n}" for n in range(11, 19)]
 IN_NAMES = [f"in{n}" for n in range(5)]

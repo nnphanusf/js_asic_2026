@@ -12,7 +12,7 @@ from cocotb.triggers import Timer
 from bitweaver import regmap as R
 from bitweaver.asm import load_program
 from bitweaver.proto import i2c_read_cmds, i2c_result, i2c_timing, i2c_write_cmds
-from bwtb import TB
+from bwtb import F_CLK, TB
 from i2c_bfm import FAST, STANDARD, I2cController, I2cMonitor, I2cTarget, Line
 
 SCL, SDA = 13, 14
@@ -40,7 +40,7 @@ async def test_i2c_controller(dut):
     await tb.start()
     scl, sda = lines(dut)
     for timing in (STANDARD, FAST):
-        div, defines = i2c_timing(timing.f_scl)
+        div, defines = i2c_timing(timing.f_scl, F_CLK)
         await tb.load(load_program("i2c_ctrl", **defines), 0, origin=0, clkdiv=div)
         mon = I2cMonitor(scl, sda, timing)
         target = I2cTarget(scl, sda, 0x50, replies=[0x11, 0x22, 0x33, 0x44, 0x55])
@@ -82,7 +82,7 @@ async def test_i2c_controller_stretch_timeout(dut):
     tb = TB(dut)
     await tb.start()
     scl, sda = lines(dut)
-    div, defines = i2c_timing(400e3)
+    div, defines = i2c_timing(400e3, F_CLK)
     await tb.load(load_program("i2c_ctrl", **defines), 0, clkdiv=div, tmo=300)
     await tb.enable(1)
     target = I2cTarget(scl, sda, 0x50)

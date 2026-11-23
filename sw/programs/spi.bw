@@ -10,7 +10,8 @@
 ; Controller for CPHA = 0 (mode 0, or mode 2 with CPOL = 1).
 ; Host protocol: push N-1, then N bytes. The program lowers CS, exchanges N bytes, raises CS, and
 ; pushes every received byte to the RX FIFO. A bit takes 4 ticks: SCK = f_clk / (4 * clkdiv),
-; at most 7.5 MHz (clkdiv 2) so that MISO has time to pass the input synchronizer.
+; at most f_clk / 8 (clkdiv 2: 6.25 MHz at 50 MHz) so that MISO has time to pass the input
+; synchronizer (bitweaver.proto.spi_clkdiv).
 .side_set 1
 .pins out=12 out_count=1 set=11 set_count=1 side=14 in=13 dirs=11,12,14 high=11
 .shift out=left in=left autopush=8

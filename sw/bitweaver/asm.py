@@ -121,14 +121,20 @@ _BIN = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, as
         ast.BitXor: operator.xor}
 
 
-def _eval(expr: str, names: dict) -> int:
+def _eval(expr: str, names: dict, real: bool = False):
+    """Evaluate an integer expression. With `real`, also allow decimals and true division (for
+    `.clkdiv`, which may be fractional, e.g. `F_CLK / 15000000`)."""
     def ev(node):
         if isinstance(node, ast.Constant) and isinstance(node.value, int):
+            return node.value
+        if real and isinstance(node, ast.Constant) and isinstance(node.value, float):
             return node.value
         if isinstance(node, ast.Name):
             if node.id not in names:
                 raise AsmError(f"unknown symbol '{node.id}'")
             return names[node.id]
+        if real and isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            return ev(node.left) / ev(node.right)
         if isinstance(node, ast.BinOp) and type(node.op) in _BIN:
             return _BIN[type(node.op)](ev(node.left), ev(node.right))
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
@@ -221,7 +227,8 @@ class _Asm:
                     else:
                         raise AsmError(f"unknown .shift option '{k}'")
             elif d == ".clkdiv":
-                p.config["clkdiv"] = float(args[0])
+                # An expression of F_CLK (the clock in Hz) keeps the program's timing at any clock.
+                p.config["clkdiv"] = float(_eval(" ".join(args), names, real=True))
             elif d == ".fifo":
                 for f in flags:
                     if f not in ("join_tx", "join_rx"):
@@ -411,11 +418,13 @@ class _Asm:
 def assemble(source: str, defines: dict | None = None) -> dict[str, Program]:
     """Assemble a source text. Returns the programs by name, in source order.
 
-    `defines` override (or add) `.define` values at file scope, e.g. {"DATA_BITS": 9}.
+    `defines` override (or add) `.define` values at file scope, e.g. {"DATA_BITS": 9}. `F_CLK`, the
+    clock in Hz, defaults to the chip's rated clock (regmap.F_CLK); pass {"F_CLK": ...} for another.
     """
     programs: dict[str, Program] = {}
     overrides = dict(defines or {})
-    globals_: dict = {"BAU_CRC": R.BAU_CRC, "BAU_STUFF": R.BAU_STUFF, "BAU_NRZI": R.BAU_NRZI,
+    globals_: dict = {"F_CLK": R.F_CLK,
+                      "BAU_CRC": R.BAU_CRC, "BAU_STUFF": R.BAU_STUFF, "BAU_NRZI": R.BAU_NRZI,
                       "BAU_MAN": R.BAU_MAN, "BAU_RESET": R.BAU_RESET,
                       "TXE": R.VPIN_TXE, "RXF": R.VPIN_RXF, "STUFF": R.VPIN_STUFF, "BERR": R.VPIN_BERR}
     cur: _Asm | None = None

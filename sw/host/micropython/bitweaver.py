@@ -2,12 +2,14 @@
 """Bitweaver driver for the Tiny Tapeout demo board (MicroPython on the RP2040 / RP2350).
 
 The host port is bit-banged on ui_in[7:5] (CS_N, SCK, MOSI) and uo_out[7] (MISO) with the Tiny
-Tapeout SDK's fast byte I/O. The design samples SCK with its own clock, so any SCK rate up to
-clk/8 works; MicroPython is far slower than that, which is fine.
+Tapeout SDK's fast byte I/O. The design samples SCK with its own clock; on real hardware keep SCK at
+or below clk/16 (about 3 MHz at 50 MHz) so MISO settles despite pad and multiplexer delays.
+MicroPython is far slower than that, which is fine.
 
-Programs are assembled on a PC into load images:
+Programs are assembled on a PC into load images. Dividers must match the clock set below
+(--f-clk, default 50 MHz); for UART the divider is f_clk / (8 * baud), 54.25 for 115200 baud:
 
-    python3 -m bitweaver.loader sw/programs/uart.bw uart_tx --sm 0 --clkdiv 65.1 -o uart_tx.json
+    python3 -m bitweaver.loader sw/programs/uart.bw uart_tx --sm 0 --clkdiv 54.25 -o uart_tx.json
 
 Copy the JSON to the board (mpremote cp uart_tx.json :), then:
 

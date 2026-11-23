@@ -1,13 +1,17 @@
 """Host-side helpers for the example protocol programs in sw/programs.
 
 They only build and parse FIFO words; any transport (simulator, cocotb, MicroPython) can send them.
+The divider helpers take the chip clock `f_clk` in Hz; it defaults to the rated clock, regmap.F_CLK
+(50 MHz).
 """
 
 from __future__ import annotations
 
+from .regmap import F_CLK
+
 
 # ---------------------------------------------------------------- UART (uart.bw)
-def uart_clkdiv(baud: float, f_clk: float = 60e6) -> float:
+def uart_clkdiv(baud: float, f_clk: float = F_CLK) -> float:
     """Clock divider for uart_tx / uart_rx: 8 ticks per bit."""
     return f_clk / (8 * baud)
 
@@ -27,7 +31,7 @@ def spi_frame(data) -> list[int]:
     return [len(data) - 1] + [b & 0xFF for b in data]
 
 
-def spi_clkdiv(f_sck: float, f_clk: float = 60e6) -> float:
+def spi_clkdiv(f_sck: float, f_clk: float = F_CLK) -> float:
     """Clock divider for the SPI controller: 4 ticks per bit."""
     return f_clk / (4 * f_sck)
 
@@ -58,7 +62,7 @@ def i2c_result(word: int) -> tuple[int, bool]:
     return (word >> 1) & 0xFF, (word & 1) == 0
 
 
-def i2c_timing(f_scl: float, f_clk: float = 60e6) -> tuple[int, dict]:
+def i2c_timing(f_scl: float, f_clk: float = F_CLK) -> tuple[int, dict]:
     """(clkdiv, assembler defines) for i2c_ctrl at or below `f_scl`, within the I2C timing limits.
 
     Standard mode (<= 100 kHz) splits a bit 5/5 ticks so SCL stays high >= 4.0 us even after a
@@ -75,7 +79,7 @@ def i2c_timing(f_scl: float, f_clk: float = 60e6) -> tuple[int, dict]:
     return div, {"T_LOW": t_low, "T_HIGH": t_high}
 
 
-def i2c_clkdiv(f_scl: float, f_clk: float = 60e6) -> int:
+def i2c_clkdiv(f_scl: float, f_clk: float = F_CLK) -> int:
     """Clock divider for i2c_ctrl (see i2c_timing; also assemble with its defines)."""
     return i2c_timing(f_scl, f_clk)[0]
 
@@ -244,6 +248,11 @@ def ps2_decode(word: int) -> tuple[int, bool]:
 
 
 # ---------------------------------------------------------------- CAN (can.bw)
+def can_clkdiv(bitrate: float, f_clk: float = F_CLK) -> float:
+    """Clock divider for can_tx / can_rx: 10 ticks per bit (10 for 500 kbit/s at 50 MHz)."""
+    return f_clk / (10 * bitrate)
+
+
 def can_crc15(bits) -> int:
     crc = 0
     for b in bits:

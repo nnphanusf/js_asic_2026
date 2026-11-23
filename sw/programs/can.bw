@@ -1,6 +1,7 @@
 ; CAN 2.0A (classical CAN, 11-bit identifiers): transmitter and receiver.
 ;
-; Every bit takes 10 ticks: clkdiv 12 gives 500 kbit/s, clkdiv 6 gives 1 Mbit/s. The bit-level assist
+; Every bit takes 10 ticks: clkdiv = f_clk / (10 * bit rate) (bitweaver.proto.can_clkdiv), so at 50 MHz
+; clkdiv 10 gives 500 kbit/s and clkdiv 5 gives 1 Mbit/s (12 and 6 at 60 MHz). The bit-level assist
 ; unit does the CAN-specific work:
 ;   * bit stuffing: after five equal bits, a complement bit (BAU_CFG: STUFF_N = 5, STUFF_ANY);
 ;   * CRC15 (polynomial 0x4599, BAU_POLY = 0x4CD1 bit-reversed) over SOF .. data, computed while

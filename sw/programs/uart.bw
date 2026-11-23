@@ -3,7 +3,7 @@
 ; Frame: start bit, DATA_BITS data bits LSB first, one stop bit. Parity is handled by the host:
 ; for 8E1 or 8O1, assemble with DATA_BITS = 9 and put the parity bit in bit 8 of each word.
 ; One bit takes 8 engine ticks, so set the clock divider to f_clk / (8 * baud):
-; 60 MHz / (8 * 115200) = 65.10.
+; 50 MHz / (8 * 115200) = 54.25 (bitweaver.proto.uart_clkdiv).
 ;
 ; Default pins follow the Tiny Tapeout demo board, where the RP2040 UART is wired to
 ; ui_in[3] (PIN3, into the chip) and uo_out[4] (PIN9, out of the chip). Override them at load time.
