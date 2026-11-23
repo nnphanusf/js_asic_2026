@@ -32,22 +32,26 @@ slow-corner slack the signed-off netlist is kept as it is.
 
 ## Protocols
 
-All rates are with a 60 MHz clock, the clock the simulations run at. "Tested" means checked in simulation against
-an independent model of the other end of the wire (see [verification.md](verification.md)); "limit" is what the
-program's timing allows. The chip signs off at 50 MHz. Engines count clock cycles, so the programs are unchanged:
-the timing helpers take the clock (`f_clk`) and compute the dividers, and every limit scales by 5/6 (SPI 6.25 MHz at
-clkdiv 2, JTAG TCK 6.25 MHz). Low-speed USB was tested at 60 MHz, where a bit is exactly 40 clocks; at 50 MHz the
-divider is fractional (33.3 clocks per bit), so bit edges move by up to one 20 ns clock.
+The "Tested" rates are with a 60 MHz clock, the clock the cocotb simulations run at. "Tested" means checked in
+simulation against an independent model of the other end of the wire (see [verification.md](verification.md));
+"limit" is what the program's timing allows. The chip signs off at 50 MHz. Engines count clock cycles, so the
+dividers are computed from the clock: the helpers in `bitweaver.proto` and the programs with absolute timing
+(`ws2812`, `onewire`, `usb`) default to the rated 50 MHz (`regmap.F_CLK`), and the tests pass 60 MHz. Limits that
+come from the clock scale by 5/6 at 50 MHz (SPI controller 6.25 MHz at clkdiv 2, JTAG TCK 6.25 MHz, UART 6.25 Mbaud).
+At 50 MHz, `sw/tests/test_clock_and_host_timing.py` checks the WS2812 pulses (T0H 360 ns, T1H 840 ns), 1-Wire
+reads against a device that releases a 0 at 16 µs, and the USB and CAN bit rates. Low-speed USB was tested at
+60 MHz, where a bit is exactly 40 clocks; at 50 MHz the divider is fractional (33.3 clocks per bit, 0.04 % fast),
+so bit edges move by up to one 20 ns clock.
 
 | Protocol | Program (instructions) | Engines | Tested | Limit and notes |
 |---|---|---|---|---|
-| UART 8N1 / 8E1 TX | `uart_tx` (4) | 1 | 9600 – 921 600 baud | 8 ticks per bit: 7.5 Mbaud at clkdiv 1 |
+| UART 8N1 / 8E1 TX | `uart_tx` (4) | 1 | 9600 – 921 600 baud | 8 ticks per bit: 6.25 Mbaud at clkdiv 1 (50 MHz) |
 | UART RX | `uart_rx` (11) | 1 | 9600 – 921 600 baud | samples mid-bit, framing error flag |
 | SPI controller, modes 0–3 | `spi_ctrl_cpha0/1` (11) | 1 | 1 MHz, 7.5 MHz | 4 ticks per bit; 7.5 MHz (clkdiv 2) leaves MISO time for the input synchronizer |
 | SPI target, mode 0 | `spi_target` (23) | 1 | 1 MHz, 2.5 MHz | about 3 MHz SCK |
 | I2C controller | `i2c_ctrl` (25) | 1 | 100 kHz, 400 kHz | all standard/fast-mode timing limits met; bit split 5/5 ticks (standard) or 6/4 (fast) |
 | I2C target | `i2c_cond` (19) + `i2c_target` (41) | 2 | 100 kHz, 400 kHz | clock stretching while the host supplies read data |
-| WS2812 | `ws2812` (4) | 1 | 857 kHz | T0H 350 ns, T1H 817 ns |
+| WS2812 | `ws2812` (4) | 1 | 857 kHz | 833 kHz at 50 MHz: T0H 360 ns, T1H 840 ns (857 kHz, 350 / 817 ns at 60 MHz) |
 | JTAG controller | `jtag` (2) | 1 | TCK 7.5 MHz, 1.7 MHz | 4 ticks per TCK |
 | SWD controller | `swd` (16) | 1 | SWCLK 3.75 MHz | 4 ticks per SWCLK |
 | PS/2 receiver | `ps2_rx` (6) | 1 | 12.5 kHz device clock | glitch filter on CLK, watchdog drops cut frames |
@@ -56,9 +60,14 @@ divider is fractional (33.3 clocks per bit), so bit edges move by up to one 20 n
 | 1-Wire master | `onewire` (28) | 1 | standard speed | presence detection with a timed WAIT |
 | SPI + I2C at once | 36 instructions in total | 2 | as above | one shared host port |
 
-**Cut:** 10BASE-T. The BAU's Manchester encoder works (tested), but the host port moves at most 7.5 Mbit/s raw
-(SCK ≤ clk/8), less than Ethernet's 10 Mbit/s, and an 8-word FIFO cannot buffer even the preamble and a minimal
-frame.
+**Cut:** 10BASE-T. The BAU's Manchester encoder works (tested), but the host port moves about 3 Mbit/s raw at the
+recommended SCK of clk/16 (6.25 Mbit/s at clk/8 even with ideal pads), far less than Ethernet's 10 Mbit/s, and an
+8-word FIFO cannot buffer even the preamble and a minimal frame.
+
+**Host port speed.** Reads need the host's SCK low time to exceed three clock cycles plus the delay the pads, the
+Tiny Tapeout multiplexer and SCK's phase add to MISO, so run SCK at clk/16 or slower on real hardware
+([architecture.md](architecture.md#host-port)). The demo board's MicroPython driver bit-bangs SCK far slower than
+that.
 
 ## History
 

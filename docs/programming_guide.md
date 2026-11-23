@@ -21,8 +21,10 @@ You need Python 3.10+ (for the assembler and simulator) and, for the RTL tests, 
 | Read | low for ≥1 us, release, sample before 15 us | holds the line low to send a 0 |
 
 Two observations make the program small: a **read slot is a write-1 slot**, and everything is slow, so a
-**1 µs tick** is plenty. At 60 MHz (the simulation clock) that is `clkdiv 60`; at the chip's 50 MHz sign-off
-clock, load it with `clkdiv=50`.
+**1 µs tick** is plenty. The divider is then the clock in MHz: `clkdiv 50` at the chip's rated 50 MHz,
+`clkdiv 60` at the 60 MHz the simulations run at. Writing it as an expression of `F_CLK` (the clock in Hz, 50 MHz
+unless the assembler is given another) keeps the program right at any clock. That matters here: a read must be
+sampled within 15 µs of the slot start, and with the 60 MHz divider on a 50 MHz chip the sample would land at 18 µs.
 
 ## 2. Choose pins, tick and host interface
 
@@ -38,7 +40,7 @@ The configuration lines at the top of the program say all of this:
 .program onewire
 .pins out=17 out_count=1 set=17 set_count=1 in=17 dirs=17 high=17 od=17
 .shift out=right in=right
-.clkdiv 60
+.clkdiv F_CLK / 1000000
 .timeout 240
 ```
 

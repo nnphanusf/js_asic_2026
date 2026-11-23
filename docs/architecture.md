@@ -83,7 +83,13 @@ this is proved formally (`formal/opendrain.sby`). I2C, 1-Wire, PS/2 and clock st
 ## Host port
 
 `bw_host_spi` is an SPI mode 0 target clocked by the system clock. SCK, MOSI and CS_N are synchronized and
-edge-detected, so SCK high and low times must each be at least three clock cycles (SCK at most clk/8 leaves margin).
+edge-detected, so SCK high and low times must each be at least three clock cycles for writes. Reads need more:
+MISO changes two to three cycles after the synchronized SCK falls, and the host samples it at the next rising
+edge, so the SCK low time must exceed three cycles plus every cycle that the pads, the Tiny Tapeout multiplexer
+and SCK's phase against the chip clock add. **On real hardware run SCK at clk/16 or slower** (about 3 MHz at
+50 MHz), which leaves four cycles (80 ns) for those delays. At clk/8 the margin is zero: reads work with ideal
+pads but shift by one bit with a single cycle of delay (`sw/tests/test_clock_and_host_timing.py` checks both, with
+`SpiDriver(miso_delay=...)` modelling the delay).
 
 ```
 CS_N  ‾‾\__________________________________________________________/‾‾
@@ -101,6 +107,11 @@ MISO      [ ID 0xB7             ][ status ][ read data      ][ ...  ]
   happens when the host clocks that word's first bit, and only if the FIFO held data when the word was latched.
   A frame that ends early never consumes data. Reading an empty FIFO returns 0 and sets `FDEBUG.RXUNDER`.
 * Raising CS_N at any time returns the port to idle within one cycle (proved formally: `formal/host_spi.sby`).
+* The FIFO status byte is sampled once per frame. A long burst of FIFO writes in one frame is not flow
+  controlled; a push to a full TX FIFO is dropped and sets the sticky `FDEBUG.TXOVER` flag, so keep a burst no
+  longer than the free space the status byte reported, or check `FDEBUG` afterwards.
+* `HOST_IRQ` is combinational logic of registered flags, so it can glitch briefly when several flags change in
+  the same cycle. Use a level-sensitive interrupt on the host (or read `INT_STAT`), not a single edge.
 
 Loading a program is one burst: `[0xC0, 0x80 + origin, word, word, ...]`.
 
@@ -138,7 +149,9 @@ gives all eight entries to one direction (programs that only transmit or only re
 **FIFO chaining:** an engine's TX FIFO can be fed from another engine's RX FIFO instead of the host
 (`FIFOCTRL.CHAIN_EN`, `CHAIN_SRC`). A word moves every cycle the source has data and the destination has room,
 so one engine can pre-process data for another (decode then re-encode, or a controller/target pair) without
-the host. Several engines may chain from the same source; they all receive each word.
+the host. Several engines may chain from the same source: each word goes to every chaining engine whose TX
+FIFO has room in that cycle and is then popped, so an engine whose FIFO is full misses that word. Do not also read
+a chained RX FIFO from the host; the host's latched word could be popped by the chain before the host pops it.
 
 ### Bit-level assist unit (BAU)
 

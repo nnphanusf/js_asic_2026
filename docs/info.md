@@ -44,8 +44,8 @@ project repository.
 
 ## How to test
 
-The design is driven over the host SPI port (mode 0, MSB first, SCK at most clk/8), normally from the RP2040 or
-RP2350 on the Tiny Tapeout demo board:
+The design is driven over the host SPI port (mode 0, MSB first, SCK at most clk/16, about 3 MHz at the rated
+50 MHz), normally from the RP2040 or RP2350 on the Tiny Tapeout demo board:
 
 | Signal | Pin |
 |---|---|
@@ -72,4 +72,14 @@ builds the SPI frames; `sw/host/micropython/bitweaver.py` is a driver for the de
 ## External hardware
 
 Standard Tiny Tapeout Pmods on the bidirectional header (`uio`), using the usual SPI, UART and I2C pin
-conventions. I2C needs external pull-up resistors on SCL and SDA.
+conventions. The demo board's I/O is 3.3 V logic, and the chip has no pull-up resistors or bus
+transceivers of its own:
+
+* I2C, 1-Wire and PS/2 need external pull-up resistors (to 3.3 V) on their open-drain lines.
+* CAN needs a CAN transceiver between the pins and the bus.
+* Low-speed USB needs the 1.5 kOhm pull-up on D-.
+* 5 V devices (PS/2 keyboards, WS2812 strips powered from 5 V) need level shifting.
+
+The example programs compute their dividers for the rated 50 MHz clock. Run the chip at another clock only with
+dividers computed for it (`--f-clk` for `python3 -m bitweaver.loader`, `f_clk=` for the helpers in
+`bitweaver.proto`).

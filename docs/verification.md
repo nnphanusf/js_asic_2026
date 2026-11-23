@@ -23,10 +23,16 @@ next-state value from the current state and the inputs sampled at the clock edge
 lock-step (layer 2) shows that the RTL implements the model exactly, and the independent protocol models (layer 3)
 are what show that the model itself does the right thing.
 
-The pytest suite (`make -C sw test`, 77 tests) checks the assembler encodings and error messages, a
+The pytest suite (`make -C sw test`, 93 tests) checks the assembler encodings and error messages, a
 disassemble/re-assemble round trip over the whole 16-bit encoding space, the generated files
 (`src/bw_defs.vh`, `docs/regmap.md` must match `regmap.py`), each documented instruction rule on the ISS, that
 every program in `sw/programs` assembles, and the MicroPython board driver against the ISS.
+
+`sw/tests/test_clock_and_host_timing.py` covers what the 60 MHz cocotb runs with ideal pads cannot: it runs the
+ISS with 20 ns cycles (the rated 50 MHz) and checks the WS2812 pulse widths at 40, 50 and 60 MHz, 1-Wire reads
+against a device that releases a 0 at 16 µs (and that the old 60 MHz divider would misread it), the USB and CAN
+bit rates, and the host port's read margin with `SpiDriver(miso_delay=...)`: at SCK clk/8 a single cycle of
+MISO delay breaks reads, at clk/16 four cycles still work.
 
 ## 2. Lock-step: RTL against the ISS
 

@@ -3,6 +3,35 @@
 Deadline 2027-01-18 (RTL freeze 2027-01-08). See `PLAN.md` for the full brief. This file is the running log:
 what is done, what is next, and every decision with its reason.
 
+## Review for real hardware (2026-11-23)
+
+A review of the whole project for edge cases found no defect in the RTL; every finding was in the software,
+the documentation or the assumptions around the chip. The RTL is unchanged apart from a comment, so the
+signed-off netlist stands.
+
+**Fixed.**
+- **Host SPI read margin.** The docs allowed SCK up to clk/8. MISO changes two to three cycles after the
+  synchronized SCK falls, so at clk/8 reads only work with ideal pads: in the ISS one cycle of extra MISO delay
+  (pads, the Tiny Tapeout multiplexer, or SCK's phase against the clock) shifts every read by one bit. The docs,
+  datasheet, MicroPython driver note and the RTL comment now say SCK at most clk/16 (about 3 MHz at 50 MHz),
+  which tolerates four cycles. `SpiDriver` gained `miso_delay` to model it, and a test pins the margins.
+- **Programs and helpers were tuned for 60 MHz** while the chip is rated for 50 MHz. With the old defaults at
+  50 MHz, low-speed USB ran at 1.25 Mbit/s, CAN at 417 kbit/s, the UART helper 17 % slow, 1-Wire sampled reads at
+  18 µs (the limit is 15 µs) and WS2812 T0H was 420 ns (limit 380 ns). Now `regmap.F_CLK` (50 MHz) is the
+  default clock: the `bitweaver.proto` helpers default to it, `.clkdiv` accepts an expression of `F_CLK`
+  (`ws2812`, `onewire`, `usb_tx`, `usb_rx` use one), the loader takes `--f-clk`, and `can_clkdiv` is new. The
+  cocotb tests pass the 60 MHz simulation clock explicitly (`bwtb.F_CLK`), so they load exactly the dividers
+  they did before. `sw/tests/test_clock_and_host_timing.py` checks the timings in real units at 50 MHz.
+- **Docs:** FIFO chaining to several engines (an engine whose TX FIFO is full misses that word), `CLKDIV_INT` 0
+  only with `FRAC` 0, `HOST_IRQ` can glitch (use a level-sensitive interrupt), long FIFO bursts are not flow
+  controlled, and the external parts each protocol needs (pull-ups, a CAN transceiver, the USB pull-up, level
+  shifting for 5 V devices).
+
+**Decided not to change.**
+- Shifting MISO on the SCK rising edge would give reads almost a full SCK period and allow faster host clocks,
+  but it changes signed-off RTL and the cycle model; clk/16 already carries every protocol.
+- The tile count (8x4 at about 25 % utilisation) is a fixed fact; routing, not logic, set it.
+
 ## Final report (2026-11-20)
 
 **Status: ready to submit.** On 144966f every workflow is green: `gds`, `precheck`, `gl_test` and `viewer` (the
@@ -37,7 +66,7 @@ The software and docs around it:
 Full numbers are in `docs/results.md`.
 
 **Verification.**
-- pytest: 77 tests.
+- pytest: 93 tests (77 at the time of this report; 16 timing tests added on 2026-11-23).
 - cocotb: 56 tests, all in cycle-by-cycle lock-step with the simulator. The same 56 pass on the routed netlist in
   CI and on the local Yosys/IHP netlist.
 - Constrained-random lock-step (Verilator): 100M cycles over 1000 seeds with no mismatch; CI runs 10M cycles on
@@ -58,8 +87,9 @@ Full numbers are in `docs/results.md`.
 - 1-Wire;
 - SPI and I2C on both engines at once.
 
-The simulations run at 60 MHz. At the 50 MHz sign-off clock the programs are unchanged and every rate limit scales
-by 5/6. Low-speed USB has exact bit timing only at 60 MHz.
+The simulations run at 60 MHz. At the 50 MHz sign-off clock the dividers are computed from the clock (since
+2026-11-23 they default to 50 MHz) and every clock-bound rate limit scales by 5/6. Low-speed USB has exact bit
+timing only at 60 MHz.
 
 **Cut**, with reasons in the decisions below:
 - two of the four engines, and the instruction memory's host read port: the four-engine design did not route;
@@ -72,10 +102,11 @@ by 5/6. Low-speed USB has exact bit timing only at 60 MHz.
 - USB works at the packet level only, not as a device stack.
 - Jump targets must be in the first 32 instructions of a program.
 - The slow-corner setup margin is under 1 ns.
+- The host port needs SCK at most clk/16 on real hardware.
 - No silicon has been tested.
 
 **Steps left for you.**
-1. Merge `phase0-setup` into `main`.
+1. Merge `phase0-setup` into `main` (done 2026-11-23, by fast-forward).
 2. Keep the repository public (it is public now).
 3. Submit through the Jane Street form when it is posted, using the green `gds` run. The deadline is 2027-01-18
    and the RTL freeze is 2027-01-08.
