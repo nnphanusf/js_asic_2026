@@ -1,14 +1,14 @@
 # How AI was used
 
-This design was built with heavy use of an AI coding agent, Claude (Anthropic), running in Claude Code with direct
-access to the repository and a local toolchain. This page says what the agent did, what the human did, and how the
-work was checked by tools rather than taken on trust.
+The competition asks for a description of how AI was used. This design was built with heavy use of an AI coding
+agent that had direct access to the repository and a local toolchain. This page says what the agent did, what the
+human did, and how the work was checked by tools rather than taken on trust.
 
 ## Division of work
 
 **Human (project owner):**
 - Chose the competition, the architecture direction (a multi-engine, PIO-style bit-banging core), the language
-  (Verilog with cocotb) and the 8x4 tile budget, and wrote the brief (`PLAN.md`) and project rules (`CLAUDE.md`).
+  (Verilog with cocotb) and the 8x4 tile budget, and wrote the brief and the project rules the agent worked from.
 - Created the GitHub repository and accounts, enabled Actions and GitHub Pages, and owns the submission.
 - Reviews the progress log (`PROGRESS.md`) at phase boundaries.
 
@@ -18,16 +18,13 @@ work was checked by tools rather than taken on trust.
   documentation, working from the brief.
 - Ran the local tools (Icarus Verilog, Verilator, Yosys, SymbiYosys, cocotb) and read the results of the GitHub
   Actions runs, and fixed what they reported.
-- Diagnosed the failed hardening runs from the LibreLane logs and chose the fixes: cutting to two engines (PLAN's
-  cut order), the timing changes in the RTL and flow settings, and the 50 MHz clock (PLAN's fallback).
+- Diagnosed the failed hardening runs from the LibreLane logs and chose the fixes: cutting to two engines (the
+  brief's cut order), the timing changes in the RTL and flow settings, and the 50 MHz clock (the brief's fallback).
+- Reviewed the finished design for edge cases on real hardware at the owner's request, and fixed what it found in
+  the software and documentation (host SPI speed, dividers for the 50 MHz clock).
 - Kept `PROGRESS.md` as a running log of decisions and their reasons.
 
-Models used: Claude Fable 5.2 wrote the register map, instruction-set simulator, assembler, loader and the
-engine-level RTL modules (`bw_sm`, `bw_fifo`, `bw_bau`, `bw_clkdiv`, `bw_imem`, `bw_host_spi`). Claude Opus 5.5 took
-over at the top-level integration (`project.v`) and wrote the lock-step testbench, the protocol programs and models,
-the random and formal verification and the documentation.
-
-The agent worked from `PLAN.md` with one instruction from the human: run all phases in one go and stop only for
+The agent worked from the brief with one instruction from the human: run all phases in one go and stop only for
 account or payment matters or changes to the fixed facts (top module, tiles, pins, deadline). Decisions it made on
 its own are logged with their reasons in `PROGRESS.md`.
 

@@ -1,6 +1,6 @@
 # Progress
 
-Deadline 2027-01-18 (RTL freeze 2027-01-08). See `PLAN.md` for the full brief. This file is the running log:
+Deadline 2027-01-18 (RTL freeze 2027-01-08). This file is the running log:
 what is done, what is next, and every decision with its reason.
 
 ## Review for real hardware (2026-11-23)
@@ -125,13 +125,13 @@ horizontal signal layer, ended global routing at 79.7 % with 14 446 overflow, an
 max-cap violations in every corner after routing. The job log truncates the slack columns of the timing table,
 so the exact slacks are only in that run's `GDS_logs` artifact (downloading it needs a GitHub login).
 
-**Fixes, following PLAN ("fix critical paths ... confirm 60 MHz or fall back to 50").**
+**Fixes, following the brief ("fix critical paths ... confirm 60 MHz or fall back to 50").**
 - RTL, exact retimings (no cycle changes): the clock divider's `cnt == 0` is now a registered flag, so an
   engine's tick comes from a flip-flop (proved equal to the counter, `formal/clkdiv.sby`); the instruction-memory
   ports read each word's next value, so no compare or bypass mux follows the 64:1 read (proved equivalent to the
   previous memory with Yosys `equiv_induct`). Delay-driven ABC estimate of the slow-corner logic path 7.57 →
   6.47 ns.
-- Flow (`src/config.json`): `CLOCK_PERIOD` 20 (50 MHz, PLAN's fallback and the Tiny Tapeout IHP default);
+- Flow (`src/config.json`): `CLOCK_PERIOD` 20 (50 MHz, the brief's fallback and the Tiny Tapeout IHP default);
   design-rule repair and timing repair after global routing, against the routed parasitics; buffers on wires
   longer than 800 um; Magic DRC off, because it took 59 minutes of the 6-hour job and repeats the check the
   precheck job makes with the PDK's KLayout SG13CMOS5L deck (Tiny Tapeout's precheck runs Magic DRC only for
@@ -167,7 +167,7 @@ synthesis to post-CTS resizing took 6 minutes, but global placement reported 20�
 overflowed at 50 % utilisation, global routing took 48 minutes and finished congested, and detailed routing had
 296 679 violations after its first 3-hour pass and 348 317 partway through the second. A Tiny Tapeout tile gives
 signals only Metal2–Metal4, and the design was dominated by wide multiplexers (five 64:1 x 16 read ports over the
-1024 instruction-memory bits, four engines). Following PLAN's cut order (engine count first), commit 297df42:
+1024 instruction-memory bits, four engines). Following the brief's cut order (engine count first), commit 297df42:
 - two engines instead of four (every protocol program still fits; none needs more than two engines);
 - no host read port on the instruction memory (words are read back through an engine: EXEC a `JMP`, read `EXEC`);
 - `PL_TARGET_DENSITY_PCT` 60 → 40 to spread placement.
@@ -232,7 +232,7 @@ Result: 15 288 IHP cells, 230 944 um2 (57 % of before), about 30 % utilisation; 
   engines and removed the IMEM host read port (15.3K cells). The earlier reasoning that 39 % utilisation "leaves
   far more than 25 % headroom" was wrong for this kind of logic.
 - **Clock (2026-11-20): 50 MHz sign-off.** The routed two-engine design missed 60 MHz in the slow and typical
-  corners. PLAN names 50 MHz as the fallback and it is the Tiny Tapeout IHP template default. RTL and programs are
+  corners. The brief names 50 MHz as the fallback and it is the Tiny Tapeout IHP template default. RTL and programs are
   unchanged (engines count cycles); simulations stay at 60 MHz, and the timing helpers take `f_clk`. Low-speed
   USB is exact only at 60 MHz (40 clocks per bit); at 50 MHz the fractional divider moves bit edges by one clock.
 - **Flow settings beyond the template (2026-11-20):** repair after global routing (`RUN_POST_GRT_DESIGN_REPAIR`,
@@ -255,7 +255,7 @@ Result: 15 288 IHP cells, 230 944 um2 (57 % of before), about 30 % utilisation; 
   6/4 at clkdiv 15 for 400 kHz (tLOW 1.5 us ≥ 1.3). A fixed 5/5 split could only reach 375 kHz in fast mode.
 - **WS2812** uses an integer divider (7, 857 kHz): the fractional 7.5 made some T0H pulses 383 ns (limit 380).
 - **10BASE-T cut:** the host SPI port tops out at clk/8 = 7.5 Mbit/s raw, below the 10 Mbit/s line rate, and an
-  8-word FIFO cannot hold even the 64-bit preamble plus a minimal frame. PLAN says to attempt it only if the timing
+  8-word FIFO cannot hold even the 64-bit preamble plus a minimal frame. The brief says to attempt it only if the timing
   math works; it does not. The BAU's Manchester mode is still implemented and tested.
 - **USB** is demonstrated at the packet level (SYNC, PID, data, CRC, EOP both ways), not as a full device stack,
   which would need a CPU-speed host behind the FIFOs.
