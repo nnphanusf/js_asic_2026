@@ -1,7 +1,9 @@
 ; Low-speed USB (1.5 Mbit/s) packet transmitter and receiver.
 ;
 ; A bit is 10 ticks: the divider is the clock / 15 MHz, so 40 clock cycles per bit at 60 MHz and a
-; fractional 33.3 at 50 MHz (bit edges then move by up to one clock). The bit-level assist unit does
+; fractional 33.3 at 50 MHz (bit edges then move by up to one clock). usb_rx synchronizes on the first
+; K of SYNC only, so the sender must be within about 0.4 % of 1.5 Mbit/s for an 8-byte DATA packet
+; (crystal or PLL clocked); USB allows a low-speed device 1.5 %. The bit-level assist unit does
 ; NRZI coding and bit stuffing (a 0 after six 1s) in both directions, and computes the CRC16 of DATA
 ; packets on transmit. Line states for low speed: J = D- high, D+ low; K = D- low, D+ high; SE0 = both
 ; low. Pins: D- = PIN11 (uio[0]), D+ = PIN12 (uio[1]); the bus needs the usual 1.5 kOhm pull-up on D-.
@@ -75,7 +77,7 @@ idle:
     wait 1 pin 0              ; J: the bus is idle (D- is also low during the previous packet's SE0)
     wait 0 pin 0              ; the first K of SYNC: hard synchronization
     set bau, BAU_RESET | BAU_NRZI | BAU_STUFF
-    mov x, !null [1]          ; X counts bits down from 0xFFFF; sample in the middle of each bit
+    mov x, !null              ; X counts bits down from 0xFFFF; sample in the middle of each bit
 .wrap_target
 bit:
     wait 1 pin STUFF-DM timeout  ; a stuff bit is due: skip the counting instruction

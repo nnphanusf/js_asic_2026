@@ -67,7 +67,7 @@ def i2c_timing(f_scl: float, f_clk: float = F_CLK) -> tuple[int, dict]:
 
     Standard mode (<= 100 kHz) splits a bit 5/5 ticks so SCL stays high >= 4.0 us even after a
     target stretched the clock; fast mode (<= 400 kHz) splits it 6/4 so SCL is low >= 1.3 us.
-    100 kHz -> (60, T_LOW 5, T_HIGH 5); 400 kHz -> (15, T_LOW 6, T_HIGH 4).
+    At 50 MHz: 100 kHz -> (50, T_LOW 5, T_HIGH 5); 400 kHz -> (13, T_LOW 6, T_HIGH 4).
     """
     import math
     if f_scl <= 100e3:
@@ -283,8 +283,12 @@ def can_tx_words(ident: int, data=b"", rtr: bool = False) -> list[int]:
 
 def can_rx_decode(words) -> tuple[int, bytes, bool]:
     """(identifier, data, CRC correct) from the words can_rx pushed for one frame."""
+    if not words:
+        return 0, b"", False
     count = words[-1]
     full, rest = divmod(count, 16)
+    if len(words) < full + 2 or count < 19:  # too few words, or too short for a header
+        return 0, b"", False
     bits = []
     for w in words[:full]:
         bits += [(w >> i) & 1 for i in range(15, -1, -1)]
@@ -367,13 +371,22 @@ def usb_tx_words(prog, pid: str, data=None, addr: int | None = None, endp: int =
 
 def usb_rx_decode(words) -> tuple[str | None, bytes, bool]:
     """(PID name, bytes after the PID, packet valid) from the words usb_rx pushed for one packet."""
+    if not words:
+        return None, b"", False
     count = words[-1]
     full, rest = divmod(count, 16)
+    if len(words) < full + 2:  # full words, the partial word, the count: anything less is a bad packet
+        return None, b"", False
     bits = []
     for w in words[:full]:
         bits += _bits_lsb(w, 16)
     if rest:
         bits += _bits_lsb(words[full] >> (16 - rest), rest)
+    if count % 8 == 1:
+        # A sender slower than the receiver: usb_rx sampled the first SE0 bit of the EOP as data
+        # before usb_se0 flagged it. Packets are whole bytes, so that one extra bit is dropped.
+        count -= 1
+        bits = bits[:count]
     if count % 8 or count < 16:
         return None, b"", False
     raw = bytes(sum(bits[8 * i + j] << j for j in range(8)) for i in range(count // 8))

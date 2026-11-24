@@ -10,7 +10,8 @@ import pytest
 from bitweaver import regmap as R
 from bitweaver.asm import load_program
 from bitweaver.loader import Bench, FastDriver, SpiDriver, clkdiv_fields
-from bitweaver.proto import can_clkdiv, i2c_timing, spi_clkdiv, uart_clkdiv
+from bitweaver.proto import (USB_PID, can_clkdiv, i2c_timing, spi_clkdiv, uart_clkdiv, usb_crc16, usb_pid_byte,
+                             usb_rx_decode, usb_tx_words)
 
 NS_50 = 20.0  # one clock cycle at the rated 50 MHz, in ns
 
@@ -50,6 +51,92 @@ def test_usb_bit_rate_at_50mhz():
 def test_can_bit_rate_at_50mhz(bitrate):
     div = effective_div(can_clkdiv(bitrate))
     assert 50e6 / (10 * div) == pytest.approx(bitrate)
+
+
+# ---------------------------------------------------------------- low-speed USB packets at 50 MHz
+GET_DESCRIPTOR = bytes([0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00])
+
+
+def _lsb(value, n):
+    return [(value >> i) & 1 for i in range(n)]
+
+
+def _usb_line(pid, data=None):
+    """(D-, D+) per bit time for one packet from J: SYNC, PID, payload, CRC16, stuffing, NRZI, EOP."""
+    bits = _lsb(0x80, 8) + _lsb(usb_pid_byte(USB_PID[pid]), 8)
+    if data is not None:
+        bits += [b for byte in data for b in _lsb(byte, 8)] + _lsb(usb_crc16(data), 16)
+    stuffed, ones = [], 0
+    for b in bits:
+        stuffed.append(b)
+        ones = ones + 1 if b else 0
+        if ones == 6:
+            stuffed.append(0)
+            ones = 0
+    level, out = 1, []
+    for b in stuffed:
+        level ^= b ^ 1  # NRZI: a 0 is a transition
+        out.append((level, level ^ 1))
+    return out + [(0, 0), (0, 0), (1, 0)]
+
+
+def _usb_receive(pid, data, offset, phase):
+    """usb_se0 + usb_rx at 50 MHz against a sender whose bit rate is off by `offset`."""
+    bench = Bench()
+    d = FastDriver(bench)
+    d.load(load_program("usb_se0"), 0, clkdiv=1)
+    d.load(load_program("usb_rx"), 1)
+    d.enable(0b11)
+    bench.run(50)
+    line = _usb_line(pid, data)
+    period = 50e6 / (1.5e6 * (1 + offset))
+    t0 = bench.cycle + 10 + phase
+
+    def sender(b):
+        k = int((b.cycle - t0) // period) if b.cycle >= t0 else -1
+        dm, dp = line[k] if 0 <= k < len(line) else (1, 0)
+        b.uio_ext = (b.uio_ext & ~3) | dm | (dp << 1)
+
+    bench.hooks.append(sender)
+    bench.run(int(period * (len(line) + 4)))
+    return usb_rx_decode(d.pop(1, d.rx_level(1)))
+
+
+@pytest.mark.parametrize("offset", [-0.004, 0.0, 0.004])
+def test_usb_rx_at_50mhz_with_sender_offset(offset):
+    """usb_rx synchronizes once, on the first K of SYNC. At 50 MHz it receives the longest low-speed
+    packet (8 data bytes) from a sender up to 0.4 % off the nominal 1.5 Mbit/s, at any phase."""
+    for phase in (0.0, 0.25, 0.5, 0.75):
+        assert _usb_receive("DATA0", GET_DESCRIPTOR, offset, phase * 33) == ("DATA0", GET_DESCRIPTOR, True)
+        assert _usb_receive("ACK", None, 5 * offset, phase * 33) == ("ACK", b"", True)
+
+
+def test_usb_tx_at_50mhz():
+    """usb_tx with the fractional divider: decoded at the nominal 1.5 Mbit/s from the first K, the
+    packet is exact, and no bit edge is more than one clock from its place on the divider's grid."""
+    bench = Bench(trace=True)
+    d = FastDriver(bench)
+    prog = load_program("usb_tx")
+    d.load(prog, 0, origin=0)
+    d.enable(1)
+    start = len(bench.trace)
+    words = usb_tx_words(prog, "DATA0", GET_DESCRIPTOR)
+    while words:  # 13 words through the 8-word joined FIFO, as fast as it drains
+        n = 8 - d.tx_level(0)
+        d.push(0, words[:n])
+        words = words[n:]
+        bench.run(34)
+    bench.run(200 * 34)
+    lines = [((p >> 11) & 1, (p >> 12) & 1) for p in bench.trace[start:]]
+    first_k = lines.index((0, 1))
+    period = 50e6 / 1.5e6
+    want = _usb_line("DATA0", GET_DESCRIPTOR)
+    got = [lines[first_k + int((k + 0.5) * period)] for k in range(len(want))]
+    assert got == want
+    # Edges against the divider's own average bit time (0.04 % short of 1/1.5 MHz at 50 MHz).
+    bit = 10 * effective_div(prog.config["clkdiv"])
+    edges = [i - first_k for i in range(first_k + 1, len(lines)) if lines[i] != lines[i - 1]]
+    assert max(abs(e - round(e / bit) * bit) for e in edges) <= 1.0
 
 
 # ---------------------------------------------------------------- WS2812 on the simulator, 20 ns cycles
