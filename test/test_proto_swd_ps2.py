@@ -13,7 +13,7 @@ import cocotb
 from cocotb.triggers import Timer
 
 from bitweaver.asm import load_program
-from bitweaver.proto import SwdSeq, ps2_decode
+from bitweaver.proto import SwdSeq, ps2_decode, swd_transfer
 from bwtb import TB
 from swd_model import DPIDR, SwdTarget
 
@@ -49,7 +49,56 @@ async def test_swd(dut):
     assert res[6] == ("read", OK, 0x1234_5678, True)
     assert res[7][1] == 0b111  # no response: the line floats high
     assert res[8] == ("read", OK, DPIDR, True)
-    assert target.line_resets == 2 and not target.errors
+    assert target.switches == 1 and target.line_resets == 1 and not target.errors
+
+    # ACK-aware transfers: a write answered with WAIT twice puts its data on the wire only once,
+    # after the OK, so the target never mistakes data bits for a request.
+    n_log = len(target.log)
+    target.wait_next = 2
+    assert await swd_do(tb, swd_transfer(1, 0, 0x8, 0xCAFE_F00D)) == (OK, None, True)
+    assert await swd_do(tb, swd_transfer(1, 1, 0x8)) == (OK, 0x1234_5678, True)  # posted
+    assert await swd_do(tb, swd_transfer(0, 1, 0xC)) == (OK, 0xCAFE_F00D, True)  # RDBUFF
+    assert target.log[n_log:] == [("wait", 1, 0, 0x8), ("wait", 1, 0, 0x8), ("write", 1, 0x8, 0xCAFE_F00D),
+                                  ("read", 1, 0x8, 0x1234_5678), ("read", 0, 0xC, 0xCAFE_F00D)], target.log[n_log:]
+    assert not target.errors
+    tb.done()
+
+
+async def swd_do(tb, gen):
+    """Run a bitweaver.proto.swd_transfer through engine 0: push its words, collect its results."""
+    try:
+        step = next(gen)
+        while True:
+            words, n = step
+            await tb.push_all(0, words)
+            step = gen.send(await tb.collect(0, n, timeout_cycles=600000))
+    except StopIteration as stop:
+        return stop.value
+
+
+@cocotb.test()
+async def test_swd_select_sequence(dut):
+    """The JTAG-to-SWD switch must start right after the high cycles: with the eight idle cycles the
+    helper used to put between them, a JTAG-mode target never switches and never answers."""
+    tb = TB(dut)
+    await tb.start()
+    target = SwdTarget(dut.pad11, dut.pad12, dut.ext12)
+    await tb.load(load_program("swd"), 0, clkdiv=4)
+    await tb.enable(1)
+    seq = SwdSeq()
+    seq.line_reset()  # 64 high, then 8 low: the old prefix
+    seq._w(0xE79E, 16)
+    seq.line_reset()
+    seq.read(0, 0x0)
+    await tb.push_all(0, seq.words)
+    res = seq.decode(await tb.collect(0, seq.n_results(), timeout_cycles=600000))
+    assert target.mode == "jtag" and res[0][1] == 0b111
+    seq = SwdSeq()
+    seq.jtag_to_swd()
+    seq.read(0, 0x0)
+    await tb.push_all(0, seq.words)
+    res = seq.decode(await tb.collect(0, seq.n_results(), timeout_cycles=600000))
+    assert target.mode == "swd" and res[0] == ("read", SwdSeq.OK, DPIDR, True)
     tb.done()
 
 

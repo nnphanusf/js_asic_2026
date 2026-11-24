@@ -188,8 +188,11 @@ class SwdSeq:
         self._w(0, 8)
 
     def jtag_to_swd(self):
-        """Line reset, the JTAG-to-SWD select sequence 0xE79E, line reset, idle."""
-        self.line_reset()
+        """The JTAG-to-SWD switch (ADIv5 B5.2.2): 64 cycles with SWDIO high, the select sequence 0xE79E
+        straight after them (a JTAG TAP only recognizes it from Test-Logic-Reset, so no idle cycle
+        may come between), then a line reset and idle cycles."""
+        for _ in range(4):
+            self._w(0xFFFF, 16)
         self._w(0xE79E, 16)
         self.line_reset()
 
@@ -198,6 +201,39 @@ class SwdSeq:
         a2, a3 = (addr >> 2) & 1, (addr >> 3) & 1
         parity = (apndp + rnw + a2 + a3) & 1
         return 1 | (apndp << 1) | (rnw << 2) | (a2 << 3) | (a3 << 4) | (parity << 5) | (0 << 6) | (1 << 7)
+
+    # A transaction in two halves, for a host that looks at the ACK before the data phase (swd_transfer).
+    def ack_phase(self, apndp: int, rnw: int, addr: int, request: int | None = None):
+        """The request, the turnaround and the 3-bit ACK. Then call data_phase with the ACK."""
+        self.ops.append(("ack", len(self.reads)))
+        self._w(self.request(apndp, rnw, addr) if request is None else request, 8)
+        self._r(1)  # turnaround
+        self._r(3)  # ACK
+
+    def data_phase(self, rnw: int, ack: int, value: int = 0, overrun_detect: bool = False):
+        """What follows an ACK. OK: the data, parity and turnaround. WAIT or FAULT: no data phase
+        (unless overrun detection is on), only the turnaround back to the host. No response: the same;
+        the host should then reset the line."""
+        self.ops.append(("data", len(self.reads)))
+        if ack == self.OK or (overrun_detect and ack in (self.WAIT, self.FAULT)):
+            if rnw:
+                self._r(16)
+                self._r(16)
+                self._r(1)  # parity
+                self._r(1)  # turnaround back to the host
+            else:
+                self._r(1)  # turnaround
+                v = value if ack == self.OK else 0
+                self._w(v & 0xFFFF, 16)
+                self._w(v >> 16, 16)
+                self._w(bin(v & 0xFFFFFFFF).count("1") & 1, 1)
+        else:
+            self._r(1)  # turnaround back to the host
+        self._w(0, 8)  # idle
+
+    def results(self, rx_words) -> list[int]:
+        """The read commands' bits, one value per read command, in order."""
+        return [w >> (16 - n) for w, n in zip(rx_words, self.reads)]
 
     def read(self, apndp: int, addr: int, request: int | None = None):
         self.ops.append(("read", len(self.reads)))
@@ -225,7 +261,9 @@ class SwdSeq:
         return len(self.reads)
 
     def decode(self, rx_words) -> list[tuple]:
-        """One tuple per transaction: ("read", ack, value, parity_ok) or ("write", ack)."""
+        """One tuple per streamed transaction (read/write): ("read", ack, value, parity_ok) or
+        ("write", ack). Streamed transactions assume an OK ACK; use swd_transfer where the target
+        may answer WAIT or FAULT."""
         vals = [w >> (16 - n) for w, n in zip(rx_words, self.reads)]
         out = []
         for kind, i in self.ops:
@@ -236,6 +274,42 @@ class SwdSeq:
             else:
                 out.append(("write", ack))
         return out
+
+
+def swd_transfer(apndp: int, rnw: int, addr: int, value: int = 0, retries: int = 8,
+                 overrun_detect: bool = False):
+    """One SWD transaction that reads the ACK before deciding on the data phase, retrying on WAIT.
+
+    A generator, so that any transport can run it: it yields (command words, number of RX words to
+    collect) and must be sent the collected RX words (see swd_run). It returns (ack, value, parity_ok);
+    value is the read data, or None for a write or a failed transaction. With overrun detection off
+    (the reset state), a WAIT or FAULT has no data phase: a write's data is never put on the wire.
+    """
+    ack = None
+    for _ in range(retries + 1):
+        seq = SwdSeq()
+        seq.ack_phase(apndp, rnw, addr)
+        ack = seq.results((yield seq.words, seq.n_results()))[1]
+        seq = SwdSeq()
+        seq.data_phase(rnw, ack, value, overrun_detect)
+        vals = seq.results((yield seq.words, seq.n_results()))
+        if ack == SwdSeq.WAIT:
+            continue
+        if ack == SwdSeq.OK and rnw:
+            v = vals[0] | (vals[1] << 16)
+            return ack, v, (bin(v).count("1") & 1) == vals[2]
+        return ack, None, ack == SwdSeq.OK
+    return ack, None, False
+
+
+def swd_run(gen, run):
+    """Drive a swd_transfer generator with run(words, n) -> n RX words; returns its result."""
+    try:
+        step = next(gen)
+        while True:
+            step = gen.send(run(*step))
+    except StopIteration as stop:
+        return stop.value
 
 
 # ---------------------------------------------------------------- PS/2 (ps2.bw)
@@ -263,26 +337,43 @@ def can_crc15(bits) -> int:
     return crc
 
 
-def can_frame_bits(ident: int, data=b"", rtr: bool = False) -> list[int]:
-    """Unstuffed bits of a classical base frame from SOF to the end of the data field."""
+def can_frame_bits(ident: int, data=b"", rtr: bool = False, dlc: int | None = None) -> list[int]:
+    """Unstuffed bits of a classical base frame from SOF to the end of the data field.
+
+    A remote frame (rtr=True) has no data field; `dlc` is the length it requests (0..8).
+    """
     data = bytes(data)
-    assert 0 <= ident < 2048 and len(data) <= 8
+    if not 0 <= ident < 2048:
+        raise ValueError(f"identifier {ident:#x} is not 11 bits")
+    if rtr:
+        if data:
+            raise ValueError("a remote frame has no data field; give the requested length as dlc")
+        dlc = dlc or 0
+    elif dlc is not None and dlc != len(data):
+        raise ValueError("dlc is only for remote frames; a data frame's DLC is its data length")
+    else:
+        dlc = len(data)
+    if not 0 <= dlc <= 8:
+        raise ValueError("a classical CAN frame carries 0..8 bytes")
     bits = [0] + [(ident >> i) & 1 for i in range(10, -1, -1)] + [int(rtr), 0, 0]
-    bits += [(len(data) >> i) & 1 for i in range(3, -1, -1)]
+    bits += [(dlc >> i) & 1 for i in range(3, -1, -1)]
     for byte in data:
         bits += [(byte >> i) & 1 for i in range(7, -1, -1)]
     return bits
 
 
-def can_tx_words(ident: int, data=b"", rtr: bool = False) -> list[int]:
+def can_tx_words(ident: int, data=b"", rtr: bool = False, dlc: int | None = None) -> list[int]:
     """TX FIFO words for can_tx: bit count - 1, then the bits MSB first."""
-    bits = can_frame_bits(ident, data, rtr)
+    bits = can_frame_bits(ident, data, rtr, dlc)
     padded = bits + [0] * (-len(bits) % 16)
     return [len(bits) - 1] + [int("".join(map(str, padded[i:i + 16])), 2) for i in range(0, len(padded), 16)]
 
 
 def can_rx_decode(words) -> tuple[int, bytes, bool]:
-    """(identifier, data, CRC correct) from the words can_rx pushed for one frame."""
+    """(identifier, data, CRC correct) from the words can_rx pushed for one frame.
+
+    A remote frame has no data field: its data is b"" whatever length its DLC requests. A frame
+    with fewer bits than its DLC needs is invalid."""
     if not words:
         return 0, b"", False
     count = words[-1]
@@ -298,9 +389,11 @@ def can_rx_decode(words) -> tuple[int, bytes, bool]:
         return sum(bits[start + i] << (n - 1 - i) for i in range(n))
 
     ident = field(1, 11)
-    dlc = min(field(15, 4), 8)
-    data = bytes(field(19 + 8 * i, 8) for i in range(dlc))
-    end = 19 + 8 * dlc
+    n_data = 0 if bits[12] else min(field(15, 4), 8)  # RTR: no data field
+    end = 19 + 8 * n_data
+    if len(bits) < end + 15:  # the data field and CRC the header announces are not all there
+        return ident, b"", False
+    data = bytes(field(19 + 8 * i, 8) for i in range(n_data))
     crc = field(end, 15)
     return ident, data, crc == can_crc15(bits[:end])
 
@@ -399,7 +492,10 @@ def usb_rx_decode(words) -> tuple[str | None, bytes, bool]:
         ok = ok and len(body) >= 2 and usb_crc16(body[:-2]) == body[-2] | (body[-1] << 8)
         body = body[:-2]
     elif name in ("OUT", "IN", "SOF", "SETUP"):
-        ok = ok and len(body) == 2
-        field = body[0] | (body[1] << 8)
-        ok = ok and usb_crc5(field & 0x7FF) == field >> 11
+        ok = ok and len(body) == 2  # 11-bit field and CRC5
+        if ok:
+            field = body[0] | (body[1] << 8)
+            ok = usb_crc5(field & 0x7FF) == field >> 11
+    elif name in ("ACK", "NAK", "STALL"):
+        ok = ok and not body  # a handshake is its PID alone
     return name, body, ok
