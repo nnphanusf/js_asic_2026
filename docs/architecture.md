@@ -70,7 +70,8 @@ Each engine (`bw_sm`) contains:
 
 Every input passes a 2-flip-flop synchronizer. The 13 protocol inputs also have an optional glitch filter
 (`PAD_FILT`): the filtered level only changes after the synchronized input has agreed for three consecutive
-cycles, which removes pulses shorter than three clock cycles (50 ns) at the cost of three more cycles of latency.
+cycles, which removes pulses shorter than three clock cycles (60 ns at 50 MHz) at the cost of three more cycles of
+latency.
 
 Every output pin has a level bit (`PIN_OUT`) and an enable bit (`PIN_OE`). The host writes them directly; engines
 change them with `OUT`/`MOV`/`SET PINS`/`PINDIRS` and side-set. All writers of a cycle are merged with a fixed
@@ -192,8 +193,8 @@ reset pin, so the asynchronous reset costs no area.
 
 ## Area and timing
 
-See [results.md](results.md) for current numbers. The design maps to about 15K IHP cells (231 000 um2, roughly
-30 % of the 8x4 core). Each engine is about 65 000 um2 including its FIFO; the instruction memory (1024
+See [results.md](results.md) for current numbers. The design maps to about 15K IHP cells in synthesis (about
+243 000 um2); after place and route, with buffers and hold-fixing delay cells, placement utilisation is 24.8 %. Each engine is about 65 000 um2 including its FIFO; the instruction memory (1024
 flip-flops and one 64:1 x 16 read port per engine) is about 75 000 um2.
 
 ### Why two engines

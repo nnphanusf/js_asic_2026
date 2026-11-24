@@ -3,6 +3,65 @@
 Deadline 2027-01-18 (RTL freeze 2027-01-08). This file is the running log:
 what is done, what is next, and every decision with its reason.
 
+## Independent review (2026-11-24)
+
+An independent review of the repository, run with a second AI assistant from a written audit brief, reproduced
+every result (pytest, cocotb, lint, formal, random lock-step, synthesis, CI) and found no RTL defect and no
+mismatch between the RTL and the ISS. Its findings were in the protocol programs, the host software, the
+testbench and the documentation. Each was reproduced here before it was fixed, and each fix has a test that fails
+without it. No RTL file changed, so the signed-off netlist stands.
+
+**Fixed.**
+- **CAN: no stuff bit after the CRC.** ISO 11898-1 stuffs the whole CRC sequence, so when the last CRC bit ends a
+  run of five, a stuff bit precedes the delimiter. `can_tx` never checked after the 15th bit: identifier 0x033
+  with data 01 put six recessive bits on the bus (a stuff error for every receiver), and 0x02B with data 01 made
+  it sample the ACK slot one bit early and report a false missing ACK. The CRC loop now checks for a stuff bit
+  before it exits (and is 5 instructions shorter, 29). The CAN model checks the trailing stuff bit and the
+  delimiter, and the test sends both frames; 306 random frames were also checked against the model's encoder.
+- **I2C: set-up times after clock stretching.** `i2c_ctrl` waited its four set-up ticks before the wait for SCL
+  to rise, so a target that stretched SCL after the ACK left about 2 µs before a repeated START or STOP
+  (limits 4.7 µs and 4.0 µs at 100 kHz). The delay now follows the wait, and both waits time out into the stuck
+  handler. The target model can stretch after the ACK, and the controller test does.
+- **Open-drain pins driven high while loading.** Every loader set the pins (`set pins, 1`) before it set
+  `PAD_OD`, so an I2C or 1-Wire line was driven high, push-pull, for the rest of the load (about 6 000 cycles
+  over SPI at clk/16). The loaders (`Driver`, the cocotb `TB`, load images) now set `PAD_OD` first, and
+  `test_loader_safety.py` checks every cycle of a load.
+- **Board driver.** The example called `DemoBoard()`, which raises once the firmware has created the board at
+  boot, and did not select `RPMode.ASIC_RP_CONTROL`, without which the RP2 does not drive `ui_in`. It now uses
+  `DemoBoard.get()` and sets the mode (checked against the tt-micropython-firmware source). Loading a second
+  image disabled the running engine and overwrote the other engine's open-drain and filter masks: images now
+  carry the masks, and the driver ORs them into the chip's and keeps the running engines' `CTRL.EN` bits.
+- **`read_imem` moved pins.** The injected `JMP` carried side-set value 0, so on an engine with a non-optional
+  side-set (SPI with CPOL 1) it pulled SCK low. All three `read_imem` versions clear side-set around the `JMP`
+  and restore `ORG` and `PINCTRL1`.
+- **Assembler checks:** `.entry` beyond the first 32 instructions (the loader's injected `JMP` cannot reach it),
+  `.wrap_target` after `.wrap`, empty programs, `out_count` over 16, `set_count` over 5, operands on `nop`, and a
+  side-set expression with spaces (`side 1 - CPOL` used to encode `side 1`).
+- **USB receive tolerance.** At 50 MHz `usb_rx` decoded an 8-byte packet only with the sender between 0 and
+  +0.3 % of 1.5 Mbit/s: it sampled at about 61 % of each bit, and a slightly slow sender made it read the first
+  EOP bit as data. The first sample is now one tick earlier, and `usb_rx_decode` drops one extra bit after whole
+  bytes (the CRC still checks the packet). The window is ±0.4 % (±2 % for a handshake) at 40, 50 and 60 MHz.
+  This is still short of the 1.5 % that USB allows a low-speed device, because `usb_rx` synchronizes only on
+  SYNC; that is now documented. The decoders also return "invalid" instead of raising on a short word list.
+- **Testbench.** The lock-step checker skipped cycles with X or Z instead of failing, and started after the reset,
+  so it never compared the reset cycles. It now fails on X or Z and starts one clock after time zero. It also
+  runs on gate-level netlists: it reads only pins, so the old reason for turning it off ("no internal state")
+  did not hold. A new formal job, `quiet.sby`, proves through the pins alone that nothing is driven from reset
+  until the host first selects the chip. `cov_report.py --require-all` fails on any missed bin.
+- **Docs:** host `EXEC` on a running engine (it stretches the interrupted delay, restarts a timed WAIT or an
+  IRQ WAIT, and can drop a pending `OUT EXEC`); a round-trip note for SPI MISO, JTAG TDO and SWD reads (clkdiv 4
+  or more on the board until its delays are measured); the datasheet's bring-up steps (`PAD_OD`, pin
+  directions, `CTRL` bits); stale 60 MHz numbers in the programming guide example, the glitch filter, the SPI and
+  JTAG rows and the `i2c_timing` docstring; the old area figure; why there are about as many hold delay cells as
+  flip-flops (the library has no enable flip-flop).
+
+**Not changed.**
+- Edge resynchronization in `usb_rx`, which full USB tolerance needs: a new receiver design, not a fix.
+- Exact slow-corner slack and which nets have the six max-slew warnings: only in the `gds` run's log archive.
+- Gate-level simulation with SDF delays: static timing analysis signs off timing; the netlist tests are
+  functional.
+- Covers for `clkdiv.sby` and `opendrain.sby`: their properties live in RTL files, which stay as signed off.
+
 ## Review for real hardware (2026-11-23)
 
 A review of the whole project for edge cases found no defect in the RTL; every finding was in the software,
@@ -66,15 +125,16 @@ The software and docs around it:
 Full numbers are in `docs/results.md`.
 
 **Verification.**
-- pytest: 93 tests (77 at the time of this report; 16 timing tests added on 2026-11-23).
+- pytest: 119 tests (77 at the time of this report; 16 added on 2026-11-23, 26 on 2026-11-24).
 - cocotb: 56 tests, all in cycle-by-cycle lock-step with the simulator. The same 56 pass on the routed netlist in
-  CI and on the local Yosys/IHP netlist.
+  CI and on the local Yosys/IHP netlist (since 2026-11-24 also in lock-step).
 - Constrained-random lock-step (Verilator): 100M cycles over 1000 seeds with no mismatch; CI runs 10M cycles on
   every push.
 - Coverage: functional 465/465 bins, line 100 % (285/285), toggle 98.3 % (8444/8590). The 146 untoggled points
   are all constant bits, listed in `docs/verification.md`.
-- Formal: five SymbiYosys jobs pass in CI: the FIFO, the host port (no deadlock), engine invariants, the clock
-  divider and open-drain safety. All five are unbounded proofs (PDR, or k-induction for open drain).
+- Formal: six SymbiYosys jobs pass in CI: the FIFO, the host port (no deadlock), engine invariants, the clock
+  divider, open-drain safety, and (since 2026-11-24) a quiet chip from reset until the host selects it. All six
+  are unbounded proofs (PDR, or k-induction for open drain).
 - Equivalence: a Yosys proof for the instruction-memory timing rewrite.
 
 **Protocols working**, each checked against an independent model of the other end:

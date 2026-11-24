@@ -23,15 +23,19 @@ next-state value from the current state and the inputs sampled at the clock edge
 lock-step (layer 2) shows that the RTL implements the model exactly, and the independent protocol models (layer 3)
 are what show that the model itself does the right thing.
 
-The pytest suite (`make -C sw test`, 93 tests) checks the assembler encodings and error messages, a
+The pytest suite (`make -C sw test`, 119 tests) checks the assembler encodings and error messages, a
 disassemble/re-assemble round trip over the whole 16-bit encoding space, the generated files
 (`src/bw_defs.vh`, `docs/regmap.md` must match `regmap.py`), each documented instruction rule on the ISS, that
 every program in `sw/programs` assembles, and the MicroPython board driver against the ISS.
+`sw/tests/test_loader_safety.py` checks on every clock cycle that loading a program never drives an open-drain pin
+high (the loaders set `PAD_OD` before any pin), and that reading instruction memory through an engine moves no
+pin.
 
 `sw/tests/test_clock_and_host_timing.py` covers what the 60 MHz cocotb runs with ideal pads cannot: it runs the
 ISS with 20 ns cycles (the rated 50 MHz) and checks the WS2812 pulse widths at 40, 50 and 60 MHz, 1-Wire reads
-against a device that releases a 0 at 16 µs (and that the old 60 MHz divider would misread it), the USB and CAN
-bit rates, and the host port's read margin with `SpiDriver(miso_delay=...)`: at SCK clk/8 a single cycle of
+against a device that releases a 0 at 16 µs (and that the old 60 MHz divider would misread it), the CAN bit
+rates, USB packets in both directions (`usb_tx` exact, edges within one clock of the divider's grid; `usb_rx`
+with the sender 0.4 % slow or fast, at four phases), and the host port's read margin with `SpiDriver(miso_delay=...)`: at SCK clk/8 a single cycle of
 MISO delay breaks reads, at clk/16 four cycles still work.
 
 ## 2. Lock-step: RTL against the ISS
@@ -39,8 +43,9 @@ MISO delay breaks reads, at clk/16 four cycles still work.
 **Every cocotb test runs in lock-step.** `test/lib/bwtb.py` starts a checker coroutine that, after every rising
 clock edge, feeds the inputs the RTL actually sampled (registered copies in `test/tb.v`, so stimulus written at the
 same instant as a clock edge cannot race) to the ISS and requires `uo_out`, `uio_out` and `uio_oe` to be identical.
-A test fails on the first differing cycle. Because MISO is one of the compared outputs, every register read also
-checks internal state.
+A test fails on the first differing cycle, and on any X or Z on an input or output (no cycle is skipped). The
+checker starts one clock after time zero, so it also compares the reset cycles and the release of the reset
+synchronizer. Because MISO is one of the compared outputs, every register read also checks internal state.
 
 **Constrained-random lock-step** (`verif/lockstep`) runs the Verilated RTL and the ISS on the same random stimulus
 and compares all outputs on every cycle. The stimulus for a seed contains:
@@ -72,12 +77,12 @@ of the wire* that knows nothing about Bitweaver:
 |---|---|---|---|
 | UART 8N1/8E1 | `uart.bw` | cocotbext-uart (third party) | 9600–921600 baud TX and RX, parity, framing error, full duplex |
 | SPI | `spi.bw` | cocotbext-spi SpiMaster; `StreamTarget` on cocotbext-spi's SpiSlaveBase | controller modes 0–3 at 1 and 7.5 MHz, multi-byte frames; target mode 0 at 1 and 2.5 MHz |
-| I2C | `i2c.bw` | `test/lib/i2c_bfm.py` (from NXP UM10204) | 100 kHz / 400 kHz, every standard- and fast-mode timing limit, ACK/NACK, repeated START, clock stretching both ways, stretch timeout |
+| I2C | `i2c.bw` | `test/lib/i2c_bfm.py` (from NXP UM10204) | 100 kHz / 400 kHz, every standard- and fast-mode timing limit, ACK/NACK, repeated START, clock stretching both ways (by the target before and after the ACK), stretch timeout |
 | WS2812 | `ws2812.bw` | pulse-width decoder from the WS2812B datasheet | T0H/T1H/bit period limits, reset latch |
 | JTAG | `jtag.bw` | IEEE 1149.1 TAP model (16-state controller, IR, IDCODE, BYPASS, user register) | IDCODE read, IR capture, register write/read-back, BYPASS delay |
 | SWD | `swd.bw` | Arm ADIv5 SW-DP model | line reset, DPIDR, power-up handshake, posted AP reads, parity, malformed request |
 | PS/2 | `ps2.bw` | keyboard model | frames, odd parity, glitches on CLK (filter), aborted frame (WAIT timeout) |
-| CAN 2.0A | `can.bw` | CAN node with its own encoder, stuffing and CRC15, wired-AND bus | TX and RX at 500 kbit/s and 1 Mbit/s, worst-case stuffing, ACK and missing ACK |
+| CAN 2.0A | `can.bw` | CAN node with its own encoder, stuffing and CRC15, wired-AND bus | TX and RX at 500 kbit/s and 1 Mbit/s, worst-case stuffing, a stuff bit after the last CRC bit (both levels), recessive CRC delimiter, ACK and missing ACK |
 | USB low speed | `usb.bw` | USB 2.0 line model with spec-literal CRC5/CRC16 | DATA0/1 (incl. all-0xFF stuffing, zero length), ACK, IN, SETUP; NRZI, stuffing, EOP, bus release |
 | 1-Wire | `onewire.bw` | Maxim 1-Wire device (ROM, scratchpad) | reset/presence, ROM with CRC8, write/read, absent device timeout |
 | Concurrency | SPI controller + I2C controller (400 kHz) | the models above, simultaneously | two protocols on both engines at once, one shared host port |
@@ -91,7 +96,8 @@ All jobs run in the `formal` workflow. "Proved" means an unbounded proof (PDR or
 | `fifo.sby` | `bw_fifo` | counts never exceed the configured depth and agree with the pointers; two arbitrary words pushed back to back come out in order, in normal, joined-TX and joined-RX modes | proved (abc pdr); 5 covers reached |
 | `host_spi.sby` | `bw_host_spi` | legal phase and bit counter; write and pop strobes are single-cycle and only follow a real SCK edge; MISO low while deselected; **no deadlock**: one cycle of CS_N high always returns to idle | proved (abc pdr); 3 covers reached |
 | `sm_props.sby` | one `bw_sm` with an unconstrained instruction stream, pins, flags and host writes | shift counters ≤ 16; injected-instruction flags consistent; wait-progress flags only with WAIT/IRQ in IR; restart gives PC = ORG and clean state; IR equals memory[PC] when not injected; **PC stays inside the wrap range** without a jump; a disabled engine does not move | proved (abc pdr, 7 min); BMC to depth 24; 12 covers reached, one per opcode completing plus stall, exec and stuff cases |
-| `opendrain.sby` | whole chip | an open-drain pad never drives high; no output register bits exist for input-only pins | proved (k-induction) |
+| `opendrain.sby` | whole chip | an open-drain pad never drives high; no output register bits exist for input-only pins | proved (k-induction). The first property holds by construction of the pad logic, and only for pins already in open-drain mode: software must set `PAD_OD` before it sets such a pin, which `test_loader_safety.py` checks |
+| `quiet.sby` | whole chip, through its pins only (`formal/quiet_top.v`) | from reset until the host first pulls CS_N low, no pad is driven and every output is low, for any other inputs | proved (abc pdr); 2 covers reached (quiet past the reset synchronizer, and the end of the quiet period) |
 | `clkdiv.sby` | `bw_clkdiv` | the registered zero flag that drives the engine tick always equals `cnt == 0`, so the registered tick is the combinational zero detect it replaced | proved (abc pdr) |
 
 One proof was run once rather than kept as a job: when the instruction-memory ports were changed to read each
@@ -109,7 +115,8 @@ the wait's progress flags. The ISS models it identically and [isa.md](isa.md) do
 cycle, so the bins hold for both). The bins are every reachable (instruction, option, outcome) combination, 465 in
 all: for example `JMP x-- not taken`, `WAIT irq 1 timed timeout`, `OUT pindirs bau stuff`, `PULL ifempty noblock
 empty`, all 256 `MOV` destination × operation × source combinations. `verif/lockstep/cov_report.py` lists the
-holes.
+holes; with `--require-all` it fails on any. The CI run (50 seeds × 200 000 cycles) reaches about 454 of the 465
+bins and only reports the rest; the 1000-seed campaign below reaches all of them.
 
 **Code coverage** is Verilator line and toggle coverage of the same runs.
 
@@ -132,13 +139,17 @@ is due, which now also has a directed test (`test_isa.test_bau_stuff_bit_into_re
 
 ## 6. Gate-level simulation
 
-The whole cocotb suite also runs on gate-level netlists (`make GATES=yes`), with lock-step off (the netlist has no
-internal state to compare; outputs are still checked by the protocol models and expected values):
+The whole cocotb suite also runs on gate-level netlists (`make GATES=yes`). Lock-step stays on: the checker uses
+only the chip's pins, so the routed netlist must match the ISS on every pin on every cycle, as the RTL does (until
+2026-11-24 it was off for netlists, and only the protocol models and expected values checked them). These
+netlists are simulated without timing (no SDF back-annotation), so they check the logic of the netlist, not its
+delays; timing is signed off by static timing analysis.
 
 * locally, on the Yosys netlist mapped to the IHP SG13CMOS5L cells (`scripts/synth_area.sh`): every test passes,
-  for the four-engine design (53 tests) and for the current two-engine design (56 tests);
+  for the four-engine design (53 tests) and for the current two-engine design (56 tests; 56 / 56 with lock-step
+  on, 2026-11-24);
 * in CI, on the routed netlist from LibreLane (`gds` workflow, `gl_test` job): 56 / 56 on 144966f, the first
-  two-engine design to pass hardening.
+  two-engine design to pass hardening; with lock-step on from the runs after 2026-11-24.
 
 ## Bugs found, and by what
 
@@ -167,7 +178,7 @@ source ~/tools/oss-cad-suite/environment      # or any install with iverilog, ve
 make -C sw test                               # pytest
 cd test && make && python3 -m cocotb_tools.check_results results.xml
 cd verif/lockstep && make run SEEDS=100 CYCLES=100000
-cd verif/lockstep && make cov SEEDS=100 && python3 cov_report.py
-cd formal && for j in fifo host_spi sm_props opendrain clkdiv; do sby -f $j.sby; done
+cd verif/lockstep && make cov SEEDS=100 && python3 cov_report.py      # --require-all with 1000 seeds
+cd formal && for j in fifo host_spi sm_props opendrain clkdiv quiet; do sby -f $j.sby; done
 scripts/synth_area.sh                         # area against the IHP cell library
 ```

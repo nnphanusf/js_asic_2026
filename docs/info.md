@@ -59,11 +59,18 @@ Each SPI frame is `[command] [address] [16-bit data words...]`. Command bit 7 se
 auto-increments the address after every word. While the command and address bytes are shifted in, MISO returns the
 ID byte `0xB7` and a FIFO status byte. Register `0x00` reads `0xB717`.
 
-1. Hold `rst_n` low, then release it. All protocol pins start as inputs.
+1. Hold `rst_n` low, then release it. All protocol pins start as inputs and nothing is driven until the host
+   writes to the chip.
 2. Write a program into instruction memory (addresses `0x80`..`0xBF`).
-3. Configure an engine (registers at `0x20 + 0x10 * n`: clock divider, wrap range, pin bases) and enable it in
-   `CTRL` (`0x02`).
-4. Push data to its TX FIFO and read results from its RX FIFO (offset `0xB` in the engine's register block).
+3. For pins that are open drain (I2C, 1-Wire, PS/2), set `PAD_OD` (`0x16`/`0x17`) first. Then set the
+   program's output pins as outputs: either with `PIN_OE` (`0x14`/`0x15`), or through the engine by writing
+   `set pindirs, 1` to its `EXEC` register (offset `0xC`) with `SET_BASE` pointing at the pin. An engine only
+   drives pins whose direction is output.
+4. Configure the engine (registers at `0x20 + 0x10 * n`: clock divider, wrap range, pin bases), restart it with
+   `CTRL.RESTART` (`0x02` bits 5:4, one per engine) and enable it with `CTRL.EN` (bits 1:0).
+5. Push data to its TX FIFO and read results from its RX FIFO (offset `0xB` in the engine's register block).
+
+`bitweaver.loader` and the demo-board driver do steps 2 to 4 for you, and set `PAD_OD` before any pin.
 
 For example, `sw/programs/uart.bw` turns SM0 into a UART transmitter on `uo_out[4]` and SM1 into a receiver on
 `ui_in[3]`, the pins wired to the demo board's UART. The `sw/bitweaver` Python package assembles programs and
@@ -79,6 +86,10 @@ transceivers of its own:
 * CAN needs a CAN transceiver between the pins and the bus.
 * Low-speed USB needs the 1.5 kOhm pull-up on D-.
 * 5 V devices (PS/2 keyboards, WS2812 strips powered from 5 V) need level shifting.
+
+Signals that an external device returns in answer to the chip's clock (SPI MISO, JTAG TDO, SWD data) pass
+the pads and the Tiny Tapeout multiplexer twice; start those programs at clkdiv 4 or more (about 3 MHz) and
+speed up only after checking the board. The host port itself needs SCK at most clk/16.
 
 The example programs compute their dividers for the rated 50 MHz clock. Run the chip at another clock only with
 dividers computed for it (`--f-clk` for `python3 -m bitweaver.loader`, `f_clk=` for the helpers in

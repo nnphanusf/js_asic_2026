@@ -135,8 +135,8 @@ d.load(load_program("onewire"), sm=0)
 d.enable(1)
 start = len(b.trace)
 d.push(0, [0x0000])                 # reset
-b.run(1200 * 60)                    # 1.2 ms
-line = "".join(str((t >> 17) & 1) for t in b.trace[start::60])  # PIN17, one sample per microsecond
+b.run(1200 * 50)                    # 1.2 ms at the rated 50 MHz
+line = "".join(str((t >> 17) & 1) for t in b.trace[start::50])  # PIN17, one sample per microsecond
 print(line.count("0"))              # 482: the reset pulse (the 480 us loop plus two instructions)
 print(d.pop(0))                     # [1]: no presence pulse, the timeout path ran
 ```

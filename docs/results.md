@@ -20,6 +20,12 @@ check), `gl_test` (the cocotb suite on the routed netlist) and `viewer` are gree
 clean. The first two-engine run missed 60 MHz, and the history table at the end describes the timing fixes. The
 four-engine design did not route; see the history table and [architecture.md](architecture.md#why-two-engines).
 
+About one hold delay cell per flip-flop is expected with this library: it has no flip-flop with a clock enable
+(only `dfrbp`/`dfrbpq`, scan and latch cells), so every register that keeps its value (the 1024 instruction-memory
+bits, the FIFOs, the configuration) feeds Q back to D through a multiplexer. Those paths are only a gate or two
+long, shorter than the hold margin plus clock uncertainty in the fast corner, so the flow pads them. The design
+has no gated or derived clocks.
+
 The GDS summary lists two kinds of synthesis warning, neither a defect:
 - "Replacing memory `\mem` with list of registers" means the FIFO storage is built from flip-flops, as intended.
 - "Latch inferred for signal `\bw_sm.\bi`" refers to `bi`, the integer loop variable of the `MOV` bit reverse
@@ -39,26 +45,34 @@ dividers are computed from the clock: the helpers in `bitweaver.proto` and the p
 (`ws2812`, `onewire`, `usb`) default to the rated 50 MHz (`regmap.F_CLK`), and the tests pass 60 MHz. Limits that
 come from the clock scale by 5/6 at 50 MHz (SPI controller 6.25 MHz at clkdiv 2, JTAG TCK 6.25 MHz, UART 6.25 Mbaud).
 At 50 MHz, `sw/tests/test_clock_and_host_timing.py` checks the WS2812 pulses (T0H 360 ns, T1H 840 ns), 1-Wire
-reads against a device that releases a 0 at 16 µs, and the USB and CAN bit rates. Low-speed USB was tested at
-60 MHz, where a bit is exactly 40 clocks; at 50 MHz the divider is fractional (33.3 clocks per bit, 0.04 % fast),
-so bit edges move by up to one 20 ns clock.
+reads against a device that releases a 0 at 16 µs, the CAN bit rates, and low-speed USB packets in both
+directions. At 50 MHz the USB divider is fractional (33.3 clocks per bit, 0.04 % fast), so `usb_tx` bit edges move
+by up to one 20 ns clock. `usb_rx` synchronizes once, on the first K of SYNC, and does not follow later edges: it
+receives an 8-byte DATA packet (the longest low-speed packet) from a sender within ±0.4 % of 1.5 Mbit/s, and a
+handshake within ±2 %. The USB specification lets a low-speed device be 1.5 % off, so `usb_rx` suits crystal or
+PLL-clocked peers, not ones with a ceramic resonator.
+
+The 60 MHz simulations have ideal pads. On the board, a signal that the external device returns in answer to an
+engine's clock edge (SPI MISO, JTAG TDO, SWD reads) has two ticks minus the two-cycle input synchronizer to arrive:
+at clkdiv 2 that is 40 ns at 50 MHz for both pad and multiplexer paths plus the device's output delay. Until the
+board's delays are measured, run these programs at clkdiv 4 or more (SCK, TCK or SWCLK about 3 MHz).
 
 | Protocol | Program (instructions) | Engines | Tested | Limit and notes |
 |---|---|---|---|---|
 | UART 8N1 / 8E1 TX | `uart_tx` (4) | 1 | 9600 – 921 600 baud | 8 ticks per bit: 6.25 Mbaud at clkdiv 1 (50 MHz) |
 | UART RX | `uart_rx` (11) | 1 | 9600 – 921 600 baud | samples mid-bit, framing error flag |
-| SPI controller, modes 0–3 | `spi_ctrl_cpha0/1` (11) | 1 | 1 MHz, 7.5 MHz | 4 ticks per bit; 7.5 MHz (clkdiv 2) leaves MISO time for the input synchronizer |
+| SPI controller, modes 0–3 | `spi_ctrl_cpha0/1` (11) | 1 | 1 MHz, 7.5 MHz (60 MHz clock) | 4 ticks per bit: 6.25 MHz at clkdiv 2 (50 MHz) with ideal pads; clkdiv 4 or more on the board (see above) |
 | SPI target, mode 0 | `spi_target` (23) | 1 | 1 MHz, 2.5 MHz | about 3 MHz SCK |
-| I2C controller | `i2c_ctrl` (25) | 1 | 100 kHz, 400 kHz | all standard/fast-mode timing limits met; bit split 5/5 ticks (standard) or 6/4 (fast) |
+| I2C controller | `i2c_ctrl` (27) | 1 | 100 kHz, 400 kHz | all standard/fast-mode timing limits met, also when a target stretches SCL before or after the ACK; bit split 5/5 ticks (standard) or 6/4 (fast) |
 | I2C target | `i2c_cond` (19) + `i2c_target` (41) | 2 | 100 kHz, 400 kHz | clock stretching while the host supplies read data |
 | WS2812 | `ws2812` (4) | 1 | 857 kHz | 833 kHz at 50 MHz: T0H 360 ns, T1H 840 ns (857 kHz, 350 / 817 ns at 60 MHz) |
-| JTAG controller | `jtag` (2) | 1 | TCK 7.5 MHz, 1.7 MHz | 4 ticks per TCK |
+| JTAG controller | `jtag` (2) | 1 | TCK 7.5 MHz, 1.7 MHz (60 MHz clock) | 4 ticks per TCK: 6.25 MHz at clkdiv 2 (50 MHz) with ideal pads |
 | SWD controller | `swd` (16) | 1 | SWCLK 3.75 MHz | 4 ticks per SWCLK |
 | PS/2 receiver | `ps2_rx` (6) | 1 | 12.5 kHz device clock | glitch filter on CLK, watchdog drops cut frames |
-| CAN 2.0A | `can_tx` (34), `can_rx` (12) | 1 each | 500 kbit/s, 1 Mbit/s | 10 ticks per bit; stuffing and CRC15 in the BAU; hard sync on SOF only |
-| Low-speed USB packets | `usb_tx` (26), `usb_rx` (14) + `usb_se0` (7) | 1, 2 | 1.5 Mbit/s | NRZI, stuffing, CRC16 in the BAU; packet level, not a device stack |
+| CAN 2.0A | `can_tx` (29), `can_rx` (12) | 1 each | 500 kbit/s, 1 Mbit/s | 10 ticks per bit; stuffing (including a stuff bit after the CRC) and CRC15 in the BAU; hard sync on SOF only |
+| Low-speed USB packets | `usb_tx` (26), `usb_rx` (14) + `usb_se0` (7) | 1, 2 | 1.5 Mbit/s | NRZI, stuffing, CRC16 in the BAU; packet level, not a device stack; receive tolerance ±0.4 % (see above) |
 | 1-Wire master | `onewire` (28) | 1 | standard speed | presence detection with a timed WAIT |
-| SPI + I2C at once | 36 instructions in total | 2 | as above | one shared host port |
+| SPI + I2C at once | 38 instructions in total | 2 | as above | one shared host port |
 
 **Cut:** 10BASE-T. The BAU's Manchester encoder works (tested), but the host port moves about 3 Mbit/s raw at the
 recommended SCK of clk/16 (6.25 Mbit/s at clk/8 even with ideal pads), far less than Ethernet's 10 Mbit/s, and an

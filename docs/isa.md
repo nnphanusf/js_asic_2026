@@ -308,6 +308,18 @@ destuffing → CRC → ISR.
   jump still jumps). If it stalls it keeps being retried every cycle (`STAT.EXEC_PENDING`).
 * `OUT EXEC` and `MOV EXEC` execute a value from inside a program on the next tick.
 
+Inject into a **disabled** engine (that is what the host tools do). On an enabled engine the injected
+instruction still runs on the next clock cycle, with these side effects (the ISS models them exactly):
+
+* Ticks that pass while it runs (one cycle, or longer if it stalls) do not count down the delay of the
+  instruction it interrupted, so that delay grows by as many ticks.
+* A stalled `WAIT ... timeout` restarts its countdown, and a stalled `IRQ WAIT` starts over: it sets its flag
+  again.
+* An instruction that the program's own `OUT EXEC` or `MOV EXEC` loaded and has not yet run is replaced, and
+  never runs.
+* An `OUT EXEC` or `MOV EXEC` injected by the host runs the instruction it produces on the next clock cycle
+  too, not on the next tick.
+
 Writing the instruction memory at the address an engine is currently stalled on replaces the stalled
 instruction (IR always follows memory unless an instruction was injected); the replacement inherits the
 stalled instruction's wait state (`WAIT ... timeout` countdown, `IRQ WAIT` phase). Avoid it, or disable
