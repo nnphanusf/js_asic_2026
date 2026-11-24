@@ -192,3 +192,16 @@ def test_regmap_consistency():
             used |= f.mask
     assert R.SM_BASE + R.NUM_SM * R.SM_STRIDE <= R.IMEM_BASE
     assert R.pack("WRAP", bottom=3, top=9) == 0x0903
+
+
+@pytest.mark.parametrize("thresh, ok", [(17, False), (-1, False), (16, True), (1, True)])
+def test_shift_thresholds_in_range(thresh, ok):
+    from bitweaver.asm import AsmError, assemble_one
+    from bitweaver.loader import sm_config
+    src = f".program t\n.shift autopush={thresh}\n    in pins, 1\n"
+    if not ok:
+        with pytest.raises(AsmError, match="threshold"):
+            assemble_one(src)
+        return
+    shiftctrl = sm_config(assemble_one(src), 0)[6]
+    assert shiftctrl & 0xF == thresh % 16 and (shiftctrl >> 8) & 1

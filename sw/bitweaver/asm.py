@@ -223,11 +223,14 @@ class _Asm:
                         if v.lower() not in ("left", "right"):
                             raise AsmError("shift direction must be left or right")
                         p.config[f"{k}_shiftdir"] = 1 if v.lower() == "right" else 0
-                    elif k in ("autopush", "autopull"):
-                        p.config[k] = 1
-                        p.config["push_thresh" if k == "autopush" else "pull_thresh"] = _eval(v, names)
-                    elif k in ("push_thresh", "pull_thresh"):
-                        p.config[k] = _eval(v, names)
+                    elif k in ("autopush", "autopull", "push_thresh", "pull_thresh"):
+                        n = _eval(v, names)
+                        if not 0 <= n <= 16:  # a 4-bit field: 16 is stored as 0, which also means 16
+                            raise AsmError(f"{k} threshold must be 1..16 (0 also means 16), not {n}")
+                        if k in ("autopush", "autopull"):
+                            p.config[k] = 1
+                            k = "push_thresh" if k == "autopush" else "pull_thresh"
+                        p.config[k] = n
                     else:
                         raise AsmError(f"unknown .shift option '{k}'")
             elif d == ".clkdiv":
