@@ -137,7 +137,15 @@ async def test_i2c_target(dut):
         await tb.wait_rx(1, 1, timeout_cycles=20000)
         assert [w & 0xFF for w in await tb.pop(1, 1)] == [0x07]
         assert await tb.rx_level(1) == 0
+        # A stretched read whose first bit is 0: SDA settles before the target releases SCL, so the
+        # monitor sees a data bit with tSU;DAT met, not a repeated START.
+        reader = cocotb.start_soon(ctrl.read(0x42, 1))
+        await Timer(40, "us")
+        assert not reader.done()
+        await tb.push(1, [0x19])
+        assert await reader == [0x19], timing.name
         assert not mon.errors, (timing.name, mon.errors)
-        assert mon.events.count("Sr") == 1 and mon.events.count("P") == 4
+        assert mon.events.count("Sr") == 1 and mon.events.count("P") == 5, mon.events
+        assert ("byte", 0x19, 1) in mon.events
         mon.stop()
     tb.done()

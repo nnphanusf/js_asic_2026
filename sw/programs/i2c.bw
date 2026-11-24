@@ -100,6 +100,10 @@ high_check:
 ;   FIFO full is dropped (FDEBUG.RXSTALL) but still ACKed.
 ; * Bytes read by the controller come from the TX FIFO. While the TX FIFO is empty the target holds
 ;   SCL low (clock stretching) until the host supplies a byte.
+; * Every data bit is on SDA at least 16 cycles before the target lets go of SCL (tSU;DAT, 250 ns
+;   in standard mode, at clocks up to 64 MHz). Otherwise, after a stretch, a 0 bit would fall while
+;   SCL rises: a false repeated START. Each bit holds SCL low for about 20 cycles after its falling
+;   edge, well inside the controller's own tLOW (1.3 us in fast mode, 0.5 us in fast mode plus).
 ; * Any START or STOP restarts the receiver, so repeated STARTs work.
 ; Run at clkdiv 1.
 .side_set 1 opt
@@ -152,8 +156,9 @@ tbyte:
     mov osr, <>osr side 0
     set y, 7       side 0
 tbit:
-    out pins, 1    side 1     ; data bit while SCL is low; stop stretching
-    wait 1 pin 31
+    out pins, 1    side 0 [7] ; data bit while SCL is low (and held low)
+    nop            side 0 [7] ; tSU;DAT: 16 cycles (320 ns at 50 MHz) before SCL is released
+    wait 1 pin 31  side 1     ; release SCL, ending a stretch; wait for it to be high
     wait 0 pin 31
     jmp y-- tbit
     set pins, 1               ; release SDA for the controller's ACK
