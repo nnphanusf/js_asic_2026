@@ -8,6 +8,7 @@ import types
 
 import pytest
 
+from bitweaver import regmap as R
 from bitweaver.asm import assemble_file
 from bitweaver.loader import Bench, build_image
 
@@ -88,3 +89,49 @@ def test_board_driver_uart(driver):
             i += 150
         i += 1
     assert bytes(got) == b"Hi"
+
+
+def _image(file, program, sm, origin=0, **kw):
+    return build_image(os.path.join(HERE, "..", "programs", file + ".bw"), program, sm=sm, origin=origin, **kw)
+
+
+def test_board_driver_open_drain_set_before_pins(driver):
+    """The image's open-drain mask is applied before any pin is set: no cycle drives SCL/SDA high."""
+    bw, bench = driver
+    image = _image("i2c", "i2c_ctrl", sm=0)
+    assert image["od"] == (1 << 13) | (1 << 14)
+    bad = []
+    bench.hooks.append(lambda b: bad.append(b.cycle) if b.out[1] & b.out[2] & 0x0C else None)
+    bw.load_image(image)
+    bw.enable(1)
+    bench.run(500)
+    assert not bad
+    assert bench.pin(13) == 1 and bench.pin(14) == 1
+
+
+def test_board_driver_second_engine_keeps_the_first(driver):
+    """Loading SM1 leaves a running SM0 enabled and keeps its open-drain and filter pins."""
+    bw, bench = driver
+    bw.load_image(_image("ps2", "ps2_rx", sm=0))
+    bw.enable(0b01)
+    bw.load_image(_image("i2c", "i2c_ctrl", sm=1, origin=32))
+    assert bench.iss.peek(R.addr("CTRL")) == 0b01
+    assert bw.en == 0b01
+    od = bench.iss.peek(R.addr("PAD_OD_LO")) | (bench.iss.peek(R.addr("PAD_OD_HI")) << 16)
+    filt = bench.iss.peek(R.addr("PAD_FILT_LO")) | (bench.iss.peek(R.addr("PAD_FILT_HI")) << 16)
+    assert od == (1 << 13) | (1 << 14) | (1 << 15) | (1 << 16)
+    assert filt == (1 << 15) | (1 << 16)
+    bw.enable(0b10)
+    assert bench.iss.peek(R.addr("CTRL")) == 0b11
+
+
+def test_board_driver_read_imem_moves_no_pin(driver):
+    bw, bench = driver
+    image = _image("spi", "spi_ctrl_cpha0", sm=0, defines={"CPOL": 1})
+    bw.load_image(image)
+    bench.run(20)
+    assert bench.pin(14) == 1
+    start = len(bench.trace)
+    code = assemble_file(os.path.join(HERE, "..", "programs", "spi.bw"), {"CPOL": 1})["spi_ctrl_cpha0"].code
+    assert [bw.read_imem(a) for a in range(4)] == list(code[:4])
+    assert all((p >> 14) & 1 for p in bench.trace[start:])

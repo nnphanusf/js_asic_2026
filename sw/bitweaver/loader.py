@@ -128,6 +128,24 @@ def pinvec_ops(name: str, value: int) -> list[tuple[int, list[int], bool]]:
     return [(R.addr(name + "_LO"), [value & 0xFFFF, (value >> 16) & 7], True)]
 
 
+SIDE_MASK = R.fld("PINCTRL1", "SIDE_COUNT").mask | R.fld("PINCTRL1", "SIDE_EN").mask
+
+
+def read_imem_ops(addr: int, sm: int, org: int, pinctrl1: int) -> list:
+    """Frames that read instruction-memory word `addr` through disabled engine `sm`, given its current
+    ORG and PINCTRL1. `None` marks where the host reads the EXEC register (the instruction register).
+
+    The injected JMP would drive a side-set pin (a non-optional side-set has no "off" value), so
+    side-set is cleared from PINCTRL1 around it; both registers are written back afterwards.
+    """
+    return [(R.addr("PINCTRL1", sm), [pinctrl1 & ~SIDE_MASK], False),
+            (R.addr("ORG", sm), [R.pack("ORG", org=addr & 0x20)], False),
+            (R.addr("EXEC", sm), [enc_jmp(R.COND_ALWAYS, addr & 31)], False),
+            None,
+            (R.addr("ORG", sm), [org], False),
+            (R.addr("PINCTRL1", sm), [pinctrl1], False)]
+
+
 def spi_wave(data: bytes, half: int = 4, lead: int = 4, gap: int = 6) -> tuple[list[tuple[int, int, int]], list[int]]:
     """Cycle-by-cycle (cs_n, sck, mosi) levels for one SPI mode-0 frame.
 
@@ -218,18 +236,22 @@ class Driver:
 
     # -- operations
     def load(self, prog: Program, sm: int, origin: int | None = None, **overrides) -> int:
-        """Load a program into engine `sm` (disabled). Returns the origin it was placed at."""
+        """Load a program into engine `sm` (disabled). Returns the origin it was placed at.
+
+        The open-drain and filter masks are set first, so a pin the program sets high is never driven
+        high, not even while it is being loaded.
+        """
         if origin is None:
             origin = self.origin
             self.origin += len(prog.code)
-        for addr, words, inc in load_ops(prog, sm, origin, self.en, **overrides):
-            self.write(addr, words, inc)
-        self.en &= ~(1 << sm)
         od, filt = pad_masks(prog, **{k: v for k, v in overrides.items() if k in ("od_pins", "filter_pins")})
         if od & ~self.od:
             self.set_open_drain(self.od | od)
         if filt & ~self.filt:
             self.set_filter(self.filt | filt)
+        for addr, words, inc in load_ops(prog, sm, origin, self.en, **overrides):
+            self.write(addr, words, inc)
+        self.en &= ~(1 << sm)
         return origin
 
     def enable(self, mask: int) -> None:
@@ -266,12 +288,17 @@ class Driver:
     def read_imem(self, addr: int, sm: int = 0) -> int:
         """Read an instruction-memory word through engine `sm` (there is no host read port).
 
-        Points the disabled engine there with an injected JMP and reads its instruction register;
-        the engine's ORG register (and JMP_PIN) and PC are changed.
+        Points the disabled engine there with an injected JMP and reads its instruction register.
+        Side-set is switched off around the JMP so no pin moves, and ORG and PINCTRL1 are restored;
+        the engine's PC is left at `addr`, so restart it before enabling it again.
         """
-        self.write(R.addr("ORG", sm), [R.pack("ORG", org=addr & 0x20)])
-        self.exec(sm, enc_jmp(R.COND_ALWAYS, addr & 31))
-        return self.read(R.addr("EXEC", sm))[0]
+        org, pinctrl1 = self.read(R.addr("ORG", sm))[0], self.read(R.addr("PINCTRL1", sm))[0]
+        for op in read_imem_ops(addr, sm, org, pinctrl1):
+            if op is None:
+                word = self.read(R.addr("EXEC", sm))[0]
+            else:
+                self.write(*op)
+        return word
 
     def rx_level(self, sm: int) -> int:
         return (self.read(R.addr("STAT", sm))[0] >> 12) & 15
@@ -361,11 +388,10 @@ def build_image(source: str, program: str, sm: int, origin: int = 0, defines: di
     prog = assemble_file(source, defines)[program]
     frames = [[a, w, inc] for a, w, inc in load_ops(prog, sm, origin, **overrides)]
     od, filt = pad_masks(prog, **{k: v for k, v in overrides.items() if k in ("od_pins", "filter_pins")})
-    for name, mask in (("PAD_OD", od), ("PAD_FILT", filt)):
-        if mask:
-            frames += [[a, w, inc] for a, w, inc in pinvec_ops(name, mask)]
     return {"program": program, "sm": sm, "origin": origin, "length": len(prog.code), "frames": frames,
-            "labels": prog.labels, "note": "OR the PAD_OD / PAD_FILT masks with other engines' masks if needed"}
+            "od": od, "filter": filt, "labels": prog.labels,
+            "note": "Before the frames, OR od and filter into PAD_OD and PAD_FILT; OR the other engines' "
+                    "CTRL.EN bits into every CTRL frame"}
 
 
 def main() -> None:

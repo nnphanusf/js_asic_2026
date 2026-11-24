@@ -15,9 +15,9 @@ from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, Lock, ReadOnly, RisingEdge
 
 from bitweaver import regmap as R
-from bitweaver.asm import Program, assemble_one, enc_jmp, instr
+from bitweaver.asm import Program, assemble_one, instr
 from bitweaver.iss import Bitweaver
-from bitweaver.loader import frame_bytes, load_ops, pad_masks, pinvec_ops
+from bitweaver.loader import frame_bytes, load_ops, pad_masks, pinvec_ops, read_imem_ops
 
 CLK_PERIOD_PS = 16666  # 60 MHz, even picoseconds
 # The nominal simulation clock. Programs and protocol helpers default to the chip's rated 50 MHz
@@ -155,14 +155,15 @@ class TB:
         if origin is None:
             origin = self.origin
             self.origin += len(prog.code)
-        for addr, words, inc in load_ops(prog, sm, origin, self.en, **overrides):
-            await self.write(addr, words, inc)
-        self.en &= ~(1 << sm)
+        # Open drain first, so a pin the program sets high is never driven high while loading.
         od, filt = pad_masks(prog, **{k: v for k, v in overrides.items() if k in ("od_pins", "filter_pins")})
         if od & ~self.od:
             await self.set_open_drain(self.od | od)
         if filt & ~self.filt:
             await self.set_filter(self.filt | filt)
+        for addr, words, inc in load_ops(prog, sm, origin, self.en, **overrides):
+            await self.write(addr, words, inc)
+        self.en &= ~(1 << sm)
         return origin
 
     async def enable(self, mask: int):
@@ -201,11 +202,15 @@ class TB:
         """Read an instruction-memory word through engine `sm` (there is no host read port).
 
         Points the engine there with an injected JMP and reads its instruction register. The engine
-        must be disabled; its ORG register (and JMP_PIN) and PC are changed.
+        must be disabled; no pin moves, ORG and PINCTRL1 are restored, and its PC is left at `addr`.
         """
-        await self.write(R.addr("ORG", sm), [R.pack("ORG", org=addr & 0x20)])
-        await self.exec(sm, enc_jmp(R.COND_ALWAYS, addr & 31))
-        return await self.read1(R.addr("EXEC", sm))
+        org, pinctrl1 = await self.read1(R.addr("ORG", sm)), await self.read1(R.addr("PINCTRL1", sm))
+        for op in read_imem_ops(addr, sm, org, pinctrl1):
+            if op is None:
+                word = await self.read1(R.addr("EXEC", sm))
+            else:
+                await self.write(*op)
+        return word
 
     async def stat(self, sm: int) -> int:
         return await self.read1(R.addr("STAT", sm))

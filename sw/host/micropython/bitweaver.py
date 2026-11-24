@@ -14,10 +14,14 @@ Programs are assembled on a PC into load images. Dividers must match the clock s
 Copy the JSON to the board (mpremote cp uart_tx.json :), then:
 
     from ttboard.demoboard import DemoBoard
+    from ttboard.mode import RPMode
     import bitweaver
-    tt = DemoBoard()
+    tt = DemoBoard.get()                  # the firmware creates the board at boot; DemoBoard() raises
     tt.shuttle.tt_um_nnphanusf_bitweaver.enable()
+    tt.mode = RPMode.ASIC_RP_CONTROL      # the RP2 drives ui_in, which carries the host port
     tt.clock_project_PWM(50_000_000)
+    tt.reset_project(True)
+    tt.reset_project(False)
     bw = bitweaver.Bitweaver()
     print(hex(bw.read(0x00)[0]))          # 0xb717
     bw.load_image("uart_tx.json")
@@ -37,9 +41,15 @@ ID = 0x00
 CTRL = 0x02
 IRQ = 0x05
 FSTAT = 0x07
+PAD_OD_LO = 0x16
+PAD_FILT_LO = 0x18
 SM_BASE = 0x20
+ORG = 0x3
+PINCTRL1 = 0x5
 FIFO = 0xB
+EXEC = 0xC
 STAT = 0xD
+SIDE_MASK = 0xE000  # PINCTRL1.SIDE_COUNT and SIDE_EN
 
 
 class Bitweaver:
@@ -84,16 +94,34 @@ class Bitweaver:
         raw = self.frame(bytes([0x40 if inc else 0, addr & 0xFF]) + bytes(2 * count))
         return [(raw[2 + 2 * i] << 8) | raw[3 + 2 * i] for i in range(count)]
 
+    def _pinvec(self, addr, mask):
+        """OR a 19-bit pin mask into a _LO / _HI register pair (read, modify, write)."""
+        lo, hi = self.read(addr, 2, inc=True)
+        mask |= lo | (hi << 16)
+        self.write(addr, [mask & 0xFFFF, (mask >> 16) & 7], inc=True)
+
     # ---------------------------------------------------------------- engines
     def load_image(self, path_or_dict):
-        """Replay a load image built by `python3 -m bitweaver.loader`."""
+        """Replay a load image built by `python3 -m bitweaver.loader`.
+
+        The image's open-drain and filter pins are added to the chip's masks before anything else,
+        so an open-drain pin is never driven high. Engines that are running stay running: their
+        CTRL.EN bits are kept in every CTRL write of the image.
+        """
         image = path_or_dict
         if isinstance(path_or_dict, str):
             with open(path_or_dict) as fh:
                 image = json.load(fh)
+        sm = image["sm"]
+        if image.get("od"):
+            self._pinvec(PAD_OD_LO, image["od"])
+        if image.get("filter"):
+            self._pinvec(PAD_FILT_LO, image["filter"])
+        self.en = self.read(CTRL)[0] & ~(1 << sm) & 0xF
         for addr, words, inc in image["frames"]:
+            if addr == CTRL:
+                words = [w | self.en for w in words]
             self.write(addr, words, inc)
-        self.en &= ~(1 << image["sm"])
         return image
 
     def enable(self, mask):
@@ -126,13 +154,23 @@ class Bitweaver:
         return self.read(SM_BASE + 0x10 * sm + FIFO, count) if count else []
 
     def exec(self, sm, word):
-        self.write(SM_BASE + 0x10 * sm + 0xC, [word])
+        self.write(SM_BASE + 0x10 * sm + EXEC, [word])
 
     def read_imem(self, addr, sm=0):
-        """Read an instruction-memory word through a disabled engine (no host read port exists)."""
-        self.write(SM_BASE + 0x10 * sm + 0x3, [addr & 0x20])  # ORG (JMP_PIN cleared)
-        self.exec(sm, addr & 31)                               # JMP addr (always)
-        return self.read(SM_BASE + 0x10 * sm + 0xC)[0]         # EXEC reads the instruction register
+        """Read an instruction-memory word through a disabled engine (no host read port exists).
+
+        No pin moves (side-set is off around the injected JMP) and ORG and PINCTRL1 are restored;
+        the engine's PC is left at `addr`, so restart it before enabling it again.
+        """
+        base = SM_BASE + 0x10 * sm
+        org, pinctrl1 = self.read(base + ORG)[0], self.read(base + PINCTRL1)[0]
+        self.write(base + PINCTRL1, [pinctrl1 & ~SIDE_MASK])
+        self.write(base + ORG, [addr & 0x20])               # ORG (JMP_PIN cleared)
+        self.exec(sm, addr & 31)                            # JMP addr (always)
+        word = self.read(base + EXEC)[0]                    # EXEC reads the instruction register
+        self.write(base + ORG, [org])
+        self.write(base + PINCTRL1, [pinctrl1])
+        return word
 
     def irq(self):
         return self.read(IRQ)[0]
