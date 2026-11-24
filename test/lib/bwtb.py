@@ -17,7 +17,7 @@ from cocotb.triggers import ClockCycles, FallingEdge, Lock, ReadOnly, RisingEdge
 from bitweaver import regmap as R
 from bitweaver.asm import Program, assemble_one, instr
 from bitweaver.iss import Bitweaver
-from bitweaver.loader import frame_bytes, load_ops, pad_masks, pinvec_ops, read_imem_ops
+from bitweaver.loader import PinOwners, frame_bytes, image_pins, load_ops, pinvec_ops, read_imem_ops
 
 CLK_PERIOD_PS = 16666  # 60 MHz, even picoseconds
 # The nominal simulation clock. Programs and protocol helpers default to the chip's rated 50 MHz
@@ -44,6 +44,7 @@ class TB:
         self.od = 0
         self.filt = 0
         self.origin = 0
+        self.owners = PinOwners()
         self.first_bytes = (0, 0)
         self._mon = None
         self._lock = Lock()  # host frames from concurrent tasks must not interleave
@@ -162,16 +163,22 @@ class TB:
         if origin is None:
             origin = self.origin
             self.origin += len(prog.code)
-        # Open drain first, so a pin the program sets high is never driven high while loading.
-        od, filt = pad_masks(prog, **{k: v for k, v in overrides.items() if k in ("od_pins", "filter_pins")})
-        if od & ~self.od:
-            await self.set_open_drain(self.od | od)
-        if filt & ~self.filt:
-            await self.set_filter(self.filt | filt)
+        # Hand the engine over (release the old program's pins, then open drain and filters), so a
+        # pin the program sets high is never driven high while loading.
+        await self._handoff(sm, image_pins(prog, **overrides))
         for addr, words, inc in load_ops(prog, sm, origin, self.en, **overrides):
             await self.write(addr, words, inc)
-        self.en &= ~(1 << sm)
         return origin
+
+    async def release(self, sm: int):
+        """Free engine `sm`: disable it, release its program's pins, clear the pad modes only it used."""
+        await self._handoff(sm, None)
+
+    async def _handoff(self, sm: int, new):
+        ops, self.od, self.filt = self.owners.handoff(sm, new, self.en, self.od, self.filt)
+        for op in ops:
+            await self.write(*op)
+        self.en &= ~(1 << sm)
 
     async def enable(self, mask: int):
         self.en |= mask & 0xF

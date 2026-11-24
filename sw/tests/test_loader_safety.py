@@ -3,6 +3,8 @@
 * Open-drain pins: the loader sets PAD_OD before it sets any pin, so a pin that a program sets high
   (released) is never driven high, not even for one clock cycle while the program is being loaded.
 * read_imem: reading instruction memory through an engine moves no pin and keeps its configuration.
+* Hand-over: loading a program onto an engine releases the pins of the program it replaces and
+  clears the pad modes only that program needed; other engines keep theirs.
 """
 
 import pytest
@@ -62,3 +64,55 @@ def test_read_imem_moves_no_pin(driver):
     assert all((p >> 14) & 1 for p in bench.trace[start:]), "SCK moved during read_imem"
     assert d.read(R.addr("ORG", 0))[0] == org
     assert d.read(R.addr("PINCTRL1", 0))[0] == pinctrl1
+
+
+def _pad_od(d) -> int:
+    lo, hi = d.read(R.addr("PAD_OD_LO"), 2, inc=True)
+    return lo | (hi << 16)
+
+
+def _driven(bench: Bench, pin: int) -> bool:
+    _, _, uio_oe = bench.out
+    return bool((uio_oe >> (pin - 11)) & 1)
+
+
+@pytest.mark.parametrize("driver", DRIVERS)
+def test_switching_protocols_hands_the_pins_over(driver):
+    """I2C, then SPI controller, then SPI target on one engine: each load releases the pins the
+    previous program drove and clears the open-drain bits it alone needed."""
+    bench = Bench()
+    d = DRIVERS[driver](bench)
+    d.load(load_program("i2c_ctrl", file="i2c"), 0, origin=0)
+    d.enable(1)
+    bench.run(200)
+    assert _pad_od(d) == (1 << 13) | (1 << 14)
+    ctrl = load_program("spi_ctrl_cpha0", file="spi", CPOL=1)
+    d.load(ctrl, 0, origin=0)
+    d.enable(1)
+    bench.run(200)
+    assert _pad_od(d) == 0  # SCK (PIN14) is push-pull again
+    assert _driven(bench, 14) and bench.pin(14) == 1  # SCK idles high (CPOL = 1), actively driven
+    assert not _driven(bench, 13)  # MISO, the old SDA, is an input now
+    d.load(load_program("spi_target", file="spi"), 0, origin=0)
+    d.enable(1)
+    bench.run(200)
+    assert not any(_driven(bench, p) for p in (11, 12, 13, 14))  # CS, MOSI, SCK in; MISO released
+
+
+@pytest.mark.parametrize("driver", DRIVERS)
+def test_release_keeps_the_other_engine(driver):
+    """Freeing one engine leaves the other engine's pins and pad modes alone."""
+    bench = Bench()
+    d = DRIVERS[driver](bench)
+    d.load(load_program("i2c_ctrl", file="i2c"), 1, origin=32)
+    d.load(load_program("ps2_rx", file="ps2"), 0, origin=0)
+    d.enable(0b11)
+    bench.run(200)
+    assert _pad_od(d) == 0xF << 13
+    d.release(0)
+    bench.run(50)
+    assert _pad_od(d) == (1 << 13) | (1 << 14)
+    lo, hi = d.read(R.addr("PAD_FILT_LO"), 2, inc=True)
+    assert lo | (hi << 16) == 0
+    assert d.read(R.addr("CTRL"))[0] & 3 == 0b10  # SM1 still running
+    assert bench.pin(13) == 1 and bench.pin(14) == 1

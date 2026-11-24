@@ -135,3 +135,32 @@ def test_board_driver_read_imem_moves_no_pin(driver):
     code = assemble_file(os.path.join(HERE, "..", "programs", "spi.bw"), {"CPOL": 1})["spi_ctrl_cpha0"].code
     assert [bw.read_imem(a) for a in range(4)] == list(code[:4])
     assert all((p >> 14) & 1 for p in bench.trace[start:])
+
+
+def test_board_driver_switches_protocols_cleanly(driver):
+    """I2C then SPI on one engine: the old SDA is released and SCK is push-pull, not open drain."""
+    bw, bench = driver
+    bw.load_image(_image("i2c", "i2c_ctrl", sm=0))
+    bw.enable(1)
+    bench.run(200)
+    bw.load_image(_image("spi", "spi_ctrl_cpha0", sm=0, defines={"CPOL": 1}))
+    bw.enable(1)
+    bench.run(200)
+    assert bench.iss.peek(R.addr("PAD_OD_LO")) == 0
+    uio_oe = bench.out[2]
+    assert (uio_oe >> 3) & 1 and bench.pin(14) == 1  # SCK driven high
+    assert not (uio_oe >> 2) & 1  # PIN13 (MISO) is an input
+    bw.release(0)
+    bench.run(20)
+    assert bench.out[2] == 0 and bw.images == {}
+
+
+def test_board_driver_rejects_old_images(driver):
+    """An image from an older loader is refused before anything is written to the chip."""
+    bw, bench = driver
+    image = _image("i2c", "i2c_ctrl", sm=0)
+    for legacy in ({k: v for k, v in image.items() if k != "format"}, dict(image, format=1)):
+        cycle = bench.cycle
+        with pytest.raises(ValueError, match="rebuild"):
+            bw.load_image(legacy)
+        assert bench.cycle == cycle

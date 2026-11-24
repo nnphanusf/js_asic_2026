@@ -41,15 +41,21 @@ ID = 0x00
 CTRL = 0x02
 IRQ = 0x05
 FSTAT = 0x07
+PIN_OE_LO = 0x14
 PAD_OD_LO = 0x16
 PAD_FILT_LO = 0x18
 SM_BASE = 0x20
 ORG = 0x3
+PINCTRL0 = 0x4
 PINCTRL1 = 0x5
 FIFO = 0xB
 EXEC = 0xC
 STAT = 0xD
 SIDE_MASK = 0xE000  # PINCTRL1.SIDE_COUNT and SIDE_EN
+SET_BASE_SHIFT = 10  # PINCTRL0.SET_BASE
+SET_COUNT_1 = 0x0400  # PINCTRL1 with SET_COUNT = 1
+SET_PINDIRS_0 = 0xE080  # set pindirs, 0
+IMAGE_FORMAT = 2
 
 
 class Bitweaver:
@@ -57,6 +63,7 @@ class Bitweaver:
         self.pins = pins & 0x1F  # levels this driver keeps on PIN0..PIN4 (ui_in[4:0])
         self.en = 0
         self.first_bytes = (0, 0)
+        self.images = {}  # sm -> (owned pins, open drain, filter) of the image loaded there
         self._out(CS_N)
 
     def set_input_pins(self, value):
@@ -94,35 +101,65 @@ class Bitweaver:
         raw = self.frame(bytes([0x40 if inc else 0, addr & 0xFF]) + bytes(2 * count))
         return [(raw[2 + 2 * i] << 8) | raw[3 + 2 * i] for i in range(count)]
 
-    def _pinvec(self, addr, mask):
-        """OR a 19-bit pin mask into a _LO / _HI register pair (read, modify, write)."""
+    def _pinvec(self, addr, clear, set_):
+        """Clear, then set, bits of a 19-bit pin mask in a _LO / _HI register pair (read, modify, write)."""
         lo, hi = self.read(addr, 2, inc=True)
-        mask |= lo | (hi << 16)
-        self.write(addr, [mask & 0xFFFF, (mask >> 16) & 7], inc=True)
+        old = lo | (hi << 16)
+        new = (old & ~clear) | set_
+        if new != old:
+            self.write(addr, [new & 0xFFFF, (new >> 16) & 7], inc=True)
 
     # ---------------------------------------------------------------- engines
     def load_image(self, path_or_dict):
         """Replay a load image built by `python3 -m bitweaver.loader`.
 
-        The image's open-drain and filter pins are added to the chip's masks before anything else,
-        so an open-drain pin is never driven high. Engines that are running stay running: their
-        CTRL.EN bits are kept in every CTRL write of the image.
+        Before any frame, the engine is handed over: the pins the previous image on this engine drove
+        are released (unless another engine's image uses them), the open-drain and filter bits only
+        that image needed are cleared, and this image's are set. So an open-drain pin is never driven
+        high, and switching an engine from one protocol to another leaves no stale driver or pad mode.
+        Engines that are running stay running: their CTRL.EN bits are kept in every CTRL write.
+        Images from older loaders are rejected before anything is written; rebuild them.
         """
         image = path_or_dict
         if isinstance(path_or_dict, str):
             with open(path_or_dict) as fh:
                 image = json.load(fh)
+        if image.get("format") != IMAGE_FORMAT:
+            raise ValueError("load image format %r, expected %d: rebuild it with python3 -m bitweaver.loader"
+                             % (image.get("format"), IMAGE_FORMAT))
         sm = image["sm"]
-        if image.get("od"):
-            self._pinvec(PAD_OD_LO, image["od"])
-        if image.get("filter"):
-            self._pinvec(PAD_FILT_LO, image["filter"])
-        self.en = self.read(CTRL)[0] & ~(1 << sm) & 0xF
+        self._handoff(sm, (image["owned"], image["od"], image["filter"]))
         for addr, words, inc in image["frames"]:
             if addr == CTRL:
                 words = [w | self.en for w in words]
             self.write(addr, words, inc)
         return image
+
+    def release(self, sm):
+        """Free engine `sm`: disable it, release its image's pins and clear the pad modes only it used."""
+        self._handoff(sm, None)
+
+    def _handoff(self, sm, new):
+        owned = od = filt = 0
+        for k, (o, d, f) in self.images.items():
+            if k != sm:
+                owned, od, filt = owned | o, od | d, filt | f
+        old_owned, old_od, old_filt = self.images.get(sm, (0, 0, 0))
+        n_owned, n_od, n_filt = new or (0, 0, 0)
+        self.en = self.read(CTRL)[0] & ~(1 << sm) & 0xF
+        self.write(CTRL, [self.en])
+        base = SM_BASE + 0x10 * sm
+        release = old_owned & ~owned
+        for pin in range(19):
+            if (release >> pin) & 1:  # through the engine, so no other pin is touched
+                self.write(base + PINCTRL0, [pin << SET_BASE_SHIFT, SET_COUNT_1], inc=True)
+                self.exec(sm, SET_PINDIRS_0)
+        self._pinvec(PAD_OD_LO, old_od & ~od, n_od)
+        self._pinvec(PAD_FILT_LO, old_filt & ~filt, n_filt)
+        if new is None:
+            self.images.pop(sm, None)
+        else:
+            self.images[sm] = new
 
     def enable(self, mask):
         self.en |= mask & 0xF
