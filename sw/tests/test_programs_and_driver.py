@@ -164,3 +164,25 @@ def test_board_driver_rejects_old_images(driver):
         with pytest.raises(ValueError, match="rebuild"):
             bw.load_image(legacy)
         assert bench.cycle == cycle
+
+
+def test_board_driver_usb_packets(driver):
+    """push_packet sends whole USB packets that fit the joined FIFO, back to back."""
+    from bitweaver.asm import load_program
+    from bitweaver.proto import usb_tx_words
+    from test_clock_and_host_timing import _usb_line
+    bw, bench = driver
+    prog = load_program("usb_tx")
+    bw.load_image(_image("usb", "usb_tx", sm=0))
+    bw.enable(1)
+    start = len(bench.trace)
+    for pid in ("ACK", "NAK"):
+        bw.push_packet(0, usb_tx_words(prog, pid), idle_pins=(1 << 11) | (1 << 12))
+    bench.run(40 * 34)
+    lines = [((p >> 11) & 1, (p >> 12) & 1) for p in bench.trace[start:]]
+    at = 0
+    for pid in ("ACK", "NAK"):
+        first_k = lines.index((0, 1), at)
+        want = _usb_line(pid)
+        assert [lines[first_k + int((k + 0.5) * 50e6 / 1.5e6)] for k in range(len(want))] == want, pid
+        at = first_k + int(len(want) * 50e6 / 1.5e6)

@@ -139,6 +139,32 @@ def test_usb_tx_at_50mhz():
     assert max(abs(e - round(e / bit) * bit) for e in edges) <= 1.0
 
 
+def test_usb_tx_at_clk16_host():
+    """Two packets back to back through the SPI host port at SCK = clk/16, the rate recommended for
+    the board: push_packet preloads the joined FIFO, so the 13-word DATA packet never runs dry
+    (streamed as the FIFO drains, the same packet stalls on the wire and fails its stuffing and CRC),
+    and waits for the first packet to finish before stopping the engine for the second."""
+    bench = Bench(trace=True)
+    d = SpiDriver(bench, half=8)
+    prog = load_program("usb_tx")
+    d.load(prog, 0, origin=0)
+    d.enable(1)
+    start = len(bench.trace)
+    packets = [("DATA0", b"abcdefgh"), ("ACK", None)]
+    for pid, data in packets:
+        d.push_packet(0, usb_tx_words(prog, pid, data), idle_pins=(1 << 11) | (1 << 12))
+    bench.run(200 * 34)
+    lines = [((p >> 11) & 1, (p >> 12) & 1) for p in bench.trace[start:]]
+    period = 50e6 / 1.5e6
+    at = 0
+    for pid, data in packets:
+        first_k = lines.index((0, 1), at)
+        want = _usb_line(pid, data)
+        got = [lines[first_k + int((k + 0.5) * period)] for k in range(len(want))]
+        assert got == want, pid
+        at = first_k + int(len(want) * period)
+
+
 # ---------------------------------------------------------------- WS2812 on the simulator, 20 ns cycles
 def _runs(levels):
     """(level, length) runs of a 0/1 sequence."""

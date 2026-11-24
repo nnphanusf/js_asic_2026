@@ -33,8 +33,9 @@ class LockstepError(AssertionError):
 
 
 class TB:
-    def __init__(self, dut, lockstep: bool = True, spi_half: int = 4):
+    def __init__(self, dut, lockstep: bool = True, spi_half: int = 4, clk_ps: int = CLK_PERIOD_PS):
         self.dut = dut
+        self.clk_ps = clk_ps
         self.lockstep = lockstep
         self.iss = Bitweaver()
         self.spi_half = spi_half
@@ -52,7 +53,7 @@ class TB:
     # ------------------------------------------------------------------ setup
     async def start(self, reset_cycles: int = 5):
         dut = self.dut
-        cocotb.start_soon(Clock(dut.clk, CLK_PERIOD_PS, unit="ps").start())
+        cocotb.start_soon(Clock(dut.clk, self.clk_ps, unit="ps").start())
         dut.ena.value = 1
         dut.rst_n.value = 0
         dut.host_cs_n.value = 1
@@ -272,6 +273,20 @@ class TB:
                 waited += poll
                 if waited > timeout_cycles:
                     raise TimeoutError(f"SM{sm} TX FIFO stayed full")
+
+    async def push_packet(self, sm: int, words, depth: int = 8, idle_pins: int = 0, poll: int = 32):
+        """bitweaver.loader.Driver.push_packet: wait for the previous packet, preload, then stream."""
+        words = list(words)
+        while await self.tx_level(sm) or (idle_pins and await self.pin_oe() & idle_pins):
+            await self.cycles_(poll)
+        await self.disable(1 << sm)
+        await self.push(sm, words[:depth])
+        await self.enable(1 << sm)
+        await self.push_all(sm, words[depth:], depth=depth, poll=poll)
+
+    async def pin_oe(self) -> int:
+        lo, hi = await self.read(R.addr("PIN_OE_LO"), 2, inc=True)
+        return lo | (hi << 16)
 
     async def collect(self, sm: int, count: int, timeout_cycles: int = 400000, poll: int = 200) -> list[int]:
         """Pop `count` words from the RX FIFO as they arrive."""

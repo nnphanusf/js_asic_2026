@@ -389,6 +389,39 @@ class Driver:
                 self.write(*op)
         return word
 
+    def push_packet(self, sm: int, words, depth: int = 8, idle_pins: int = 0) -> None:
+        """Queue one packet so that the engine never runs out of words in the middle of it.
+
+        A program such as usb_tx starts sending at its first word and stalls on the wire if a later
+        word is late. Streaming the words as the FIFO drains is too slow at the recommended host SCK
+        (clk/16): status polls and frames cost more than the line takes to send a word. So this waits
+        until the previous packet is out (TX FIFO empty and every pin in `idle_pins` released), stops
+        the engine, preloads `depth` words (8 for a joined FIFO), starts it again and streams the
+        rest, which then has a deadline of the preloaded words' time on the wire. Packets of at most
+        `depth` words have no deadline at all.
+        """
+        words = list(words)
+        while self.tx_level(sm) or (idle_pins and self.pin_oe() & idle_pins):
+            self.idle(32)
+        self.disable(1 << sm)
+        self.push(sm, words[:depth])
+        self.enable(1 << sm)
+        words = words[depth:]
+        while words:
+            n = depth - self.tx_level(sm)
+            if n > 0:
+                self.push(sm, words[:n])
+                words = words[n:]
+            else:
+                self.idle(32)
+
+    def pin_oe(self) -> int:
+        lo, hi = self.read(R.addr("PIN_OE_LO"), 2, inc=True)
+        return lo | (hi << 16)
+
+    def idle(self, cycles: int) -> None:
+        """Let time pass between polls (a real transport's reads take time on their own)."""
+
     def rx_level(self, sm: int) -> int:
         return (self.read(R.addr("STAT", sm))[0] >> 12) & 15
 
@@ -402,6 +435,9 @@ class FastDriver(Driver):
     def __init__(self, bench: Bench):
         super().__init__()
         self.b = bench
+
+    def idle(self, cycles):
+        self.b.run(cycles)
 
     def write(self, addr, words, inc=False):
         iss = self.b.iss
@@ -440,6 +476,9 @@ class SpiDriver(Driver):
         self.half = half
         self.miso_delay = miso_delay
         self.first_bytes = (0, 0)  # the ID and status bytes seen in the last frame
+
+    def idle(self, cycles):
+        self.b.run(cycles)
 
     def _frame(self, data: bytes) -> bytes:
         wave, samples = spi_wave(data, self.half)

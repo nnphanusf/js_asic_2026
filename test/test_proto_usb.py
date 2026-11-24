@@ -10,6 +10,7 @@ import cocotb
 from cocotb.triggers import Timer
 
 from bitweaver.asm import load_program
+from bitweaver.loader import clkdiv_fields
 from bitweaver.proto import usb_rx_decode, usb_tx_words
 from bwtb import F_CLK, TB
 from usb_model import UsbLines, packet_bits
@@ -44,6 +45,28 @@ async def test_usb_tx(dut):
             assert (res["addr"], res["endp"]) == (p["addr"], p["endp"])
         await Timer(5, "us")
         assert lines.state() == UsbLines.J and int(dut.uio_oe.value) & 3 == 0  # bus released
+    tb.done()
+
+
+@cocotb.test()
+async def test_usb_tx_at_50mhz_clk16_host(dut):
+    """At the rated 50 MHz with the host port at SCK = clk/16: push_packet preloads the joined FIFO
+    before starting the engine, so even the 13-word DATA packet never runs dry on the wire."""
+    tb = TB(dut, spi_half=8, clk_ps=20000)
+    await tb.start()
+    prog = load_program("usb_tx", F_CLK=50_000_000)
+    i, f = clkdiv_fields(prog.config["clkdiv"])
+    lines = UsbLines(dut, bit_ps=round(10 * (i + f / 256) * 20000))
+    await tb.load(prog, 0)
+    await tb.enable(1)
+    for p in PACKETS + [dict(pid="DATA1", data=b"abcdefgh")]:
+        rx = cocotb.start_soon(lines.receive())
+        await tb.push_packet(0, usb_tx_words(prog, **p), idle_pins=(1 << 11) | (1 << 12))
+        res = await rx
+        assert res["pid"] == p["pid"] and res["pid_ok"], res
+        assert res["stuff_ok"] and res["eop_ok"] and res["whole_bytes"] and res["crc_ok"], res
+        if "data" in p:
+            assert res["payload"] == p["data"]
     tb.done()
 
 

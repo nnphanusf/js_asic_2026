@@ -181,6 +181,29 @@ class Bitweaver:
             if self.first_bytes[1] & (1 << sm):
                 self.write(SM_BASE + 0x10 * sm + FIFO, [words.pop(0)])
 
+    def push_packet(self, sm, words, depth=8, idle_pins=0):
+        """Queue one packet so the engine never runs out of words in the middle of it (usb_tx).
+
+        Waits until the previous packet is out (TX FIFO empty and every pin in `idle_pins` released,
+        0x1800 for USB on PIN11/PIN12), stops the engine, preloads `depth` words in one frame, starts
+        the engine and pushes the rest. A packet of at most `depth` words is always safe: for USB the
+        handshakes (5 words), tokens (8) and empty DATA packets (7). The rest of a longer packet has to
+        arrive within the preloaded words' time on the wire (about 43 us for an 8-byte DATA packet),
+        which this bit-banged port cannot do; send those from a faster SPI host.
+        """
+        words = list(words)
+        base = SM_BASE + 0x10 * sm
+        while (self.read(base + STAT)[0] >> 8) & 0xF or (idle_pins and self._pins(PIN_OE_LO) & idle_pins):
+            pass
+        self.disable(1 << sm)
+        self.write(base + FIFO, words[:depth])
+        self.enable(1 << sm)
+        self.push(sm, words[depth:])
+
+    def _pins(self, addr):
+        lo, hi = self.read(addr, 2, inc=True)
+        return lo | (hi << 16)
+
     def rx_level(self, sm):
         return (self.read(SM_BASE + 0x10 * sm + STAT)[0] >> 12) & 0xF
 

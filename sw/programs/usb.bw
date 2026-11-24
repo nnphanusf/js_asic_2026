@@ -19,6 +19,12 @@
 ;   CRC16            mov osr, !crc                              (no data words: the bits come from the CRC)
 ;   end of packet    jmp eop
 ; Inside every 10-tick bit the pins change at tick 3, also across segments and stuff bits.
+; A packet starts with its first word and a late word stalls it on the wire, so queue each packet
+; with push_packet (bitweaver.loader.Driver, the board driver, the testbench): it preloads the 8-word
+; FIFO with the engine stopped. Handshakes (5 words), tokens (8) and empty DATA packets (7) then
+; have no deadline; for longer DATA packets the rest must follow within the preloaded words' time on
+; the wire, about 43 us for 8 bytes. The host port at SCK = clk/16 manages that; streaming the words
+; as the FIFO drains does not, and neither does the bit-banged MicroPython port.
 .pins out=DM out_count=2 set=DM set_count=2 jmp=STUFF
 .clkdiv F_CLK / 15000000
 .bau poly=0xA001 stuff=6 ones

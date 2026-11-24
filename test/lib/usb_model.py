@@ -7,7 +7,7 @@ x^5+x^2+1, initial all ones, the inverted remainder sent MSb first).
 
 from __future__ import annotations
 
-from cocotb.triggers import FallingEdge, Timer
+from cocotb.triggers import FallingEdge, ReadOnly, Timer
 
 PID = {"OUT": 0x1, "IN": 0x9, "SOF": 0x5, "SETUP": 0xD, "DATA0": 0x3, "DATA1": 0xB, "ACK": 0x2,
        "NAK": 0xA, "STALL": 0xE}
@@ -84,7 +84,13 @@ class UsbLines:
 
     async def receive(self) -> dict:
         """Wait for a packet on the lines and decode it, checking stuffing and the EOP."""
-        await FallingEdge(self.dm_pad)  # first K of SYNC
+        while True:
+            await FallingEdge(self.dm_pad)  # first K of SYNC
+            await ReadOnly()
+            # Icarus can glitch D- low for zero time when the design releases the lines after an EOP
+            # (the pad expression is evaluated piecewise); only a K that is really there counts.
+            if self.state() == self.K:
+                break
         await Timer(self.bit_ps // 2, "ps")
         raw, level = [], 1
         while True:
