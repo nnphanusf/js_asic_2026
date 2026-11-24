@@ -13,17 +13,21 @@ from cocotb.triggers import FallingEdge, RisingEdge, Timer
 from cocotb.utils import get_sim_time
 
 from bitweaver.asm import load_program
-from bitweaver.proto import JtagSeq, ws2812_words
+from bitweaver.proto import WS2812_RESET_US, JtagSeq, ws2812_words
 from bwtb import F_CLK, TB
 
 
 # ----------------------------------------------------------------------------- WS2812
 class Ws2812Decoder:
-    """Decodes a WS2812 data line and checks the pulse timing (WS2812B datasheet, in ns)."""
+    """Decodes a WS2812 data line and checks the pulse timing (WS2812B datasheet, in ns).
+
+    A frame ends when the line has been low for RESET, the WS2812B-V5 latch time; every other low
+    gap must be part of a bit. So a gap that is too long for a bit but too short to latch every
+    revision (an older part's 50 us, say) is an error."""
     T0H = (220, 380)
     T1H = (580, 1000)
     BIT = (1000, 1600)  # total bit period
-    RESET = 50000
+    RESET = 280000
 
     def __init__(self, pin):
         self.pin = pin
@@ -33,20 +37,21 @@ class Ws2812Decoder:
 
     async def _run(self):
         bits: list[int] = []
-        last_rise = None
+        last_rise = last_fall = None
         while True:
             await RisingEdge(self.pin)
             t = get_sim_time("ns")
             if last_rise is not None:
-                period = t - last_rise
-                if period >= self.RESET:
+                period, low = t - last_rise, t - last_fall
+                if low >= self.RESET:
                     if bits:
                         self.frames.append(bits)
                     bits = []
                 elif not self.BIT[0] <= period <= self.BIT[1]:
-                    self.errors.append(f"bit period {period:.0f} ns at {t:.0f} ns")
+                    self.errors.append(f"bit period {period:.0f} ns (low {low:.0f} ns) at {t:.0f} ns")
             await FallingEdge(self.pin)
-            high = get_sim_time("ns") - t
+            last_fall = get_sim_time("ns")
+            high = last_fall - t
             if self.T0H[0] <= high <= self.T0H[1]:
                 bits.append(0)
             elif self.T1H[0] <= high <= self.T1H[1]:
@@ -79,7 +84,7 @@ async def test_ws2812(dut):
     for pixels in frames:
         await tb.push_all(0, ws2812_words(pixels))
         await tb.wait_tx_empty(0)
-        await Timer(80, "us")  # the line stays low: the LEDs latch
+        await Timer(WS2812_RESET_US, "us")  # the line stays low: every LED revision latches
     # Close the last frame with one more pulse so the decoder sees the reset gap.
     await tb.push_all(0, ws2812_words([(0, 0, 0)]))
     await Timer(40, "us")

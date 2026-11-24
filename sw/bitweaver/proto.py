@@ -85,8 +85,14 @@ def i2c_clkdiv(f_scl: float, f_clk: float = F_CLK) -> int:
 
 
 # ---------------------------------------------------------------- WS2812 (ws2812.bw)
+WS2812_RESET_US = 300  # line low between frames: > 280 us latches the WS2812B-V5, > 50 us older parts
+
+
 def ws2812_words(pixels) -> list[int]:
-    """Pack (r, g, b) pixels into 16-bit words, GRB order, MSB first; the tail is padded with 0 bits."""
+    """Pack (r, g, b) pixels into 16-bit words, GRB order, MSB first; the tail is padded with 0 bits.
+
+    After the last word leaves the TX FIFO, keep the line low for WS2812_RESET_US before the next
+    frame, so that every WS2812 revision latches the frame."""
     bits = []
     for r, g, b in pixels:
         for byte in (g, r, b):

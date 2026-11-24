@@ -7,7 +7,10 @@
 ; T1H 580..1000 ns, bit 1.25 +- 0.6 us). An integer divider keeps every pulse exactly the same length.
 ; Pixels are streamed MSB first, 24 bits each in G, R, B order, packed into 16-bit FIFO words (see
 ; bitweaver.proto.ws2812_words). When the TX FIFO runs dry the line stays low, which latches the
-; pixels after 50 us (the "reset" time).
+; pixels once it has been low for the LEDs' reset time: more than 50 us for the original WS2812 and
+; WS2812B, more than 280 us for the WS2812B-V5 and most current parts. The host decides when a frame
+; ends: keep each frame's words coming without a gap, and wait at least WS2812_RESET_US (300 us)
+; after the TX FIFO empties before the next frame.
 ; Default pin: PIN5 (uo_out[0]).
 
 .program ws2812
