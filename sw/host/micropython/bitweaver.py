@@ -56,6 +56,7 @@ SET_BASE_SHIFT = 10  # PINCTRL0.SET_BASE
 SET_COUNT_1 = 0x0400  # PINCTRL1 with SET_COUNT = 1
 SET_PINDIRS_0 = 0xE080  # set pindirs, 0
 IMAGE_FORMAT = 2
+UIO_PINS = 0xFF << 11  # PIN11..PIN18; PIN5..PIN10 have no output enable
 
 
 class Bitweaver:
@@ -128,7 +129,7 @@ class Bitweaver:
             raise ValueError("load image format %r, expected %d: rebuild it with python3 -m bitweaver.loader"
                              % (image.get("format"), IMAGE_FORMAT))
         sm = image["sm"]
-        self._handoff(sm, (image["owned"], image["od"], image["filter"]))
+        self._handoff(sm, (image["owned"], image["dirs"], image["od"], image["filter"]))
         for addr, words, inc in image["frames"]:
             if addr == CTRL:
                 words = [w | self.en for w in words]
@@ -140,16 +141,18 @@ class Bitweaver:
         self._handoff(sm, None)
 
     def _handoff(self, sm, new):
+        """bitweaver.loader.PinOwners.handoff: release the old image's pins (PIN11..PIN18 only, and not
+        those the new image sets up itself unless their open-drain bit goes), then the pad modes."""
         owned = od = filt = 0
-        for k, (o, d, f) in self.images.items():
+        for k, (o, _, d, f) in self.images.items():
             if k != sm:
                 owned, od, filt = owned | o, od | d, filt | f
-        old_owned, old_od, old_filt = self.images.get(sm, (0, 0, 0))
-        n_owned, n_od, n_filt = new or (0, 0, 0)
+        old_owned, _, old_od, old_filt = self.images.get(sm, (0, 0, 0, 0))
+        n_owned, n_dirs, n_od, n_filt = new or (0, 0, 0, 0)
         self.en = self.read(CTRL)[0] & ~(1 << sm) & 0xF
         self.write(CTRL, [self.en])
         base = SM_BASE + 0x10 * sm
-        release = old_owned & ~owned
+        release = old_owned & ~owned & UIO_PINS & (~n_dirs | (old_od & ~od & ~n_od))
         for pin in range(19):
             if (release >> pin) & 1:  # through the engine, so no other pin is touched
                 self.write(base + PINCTRL0, [pin << SET_BASE_SHIFT, SET_COUNT_1], inc=True)

@@ -123,13 +123,16 @@ def pad_masks(prog: Program, **overrides) -> tuple[int, int]:
     return pin_mask(c.get("od_pins")), pin_mask(c.get("filter_pins"))
 
 
-def image_pins(prog: Program, **overrides) -> tuple[int, int, int]:
-    """(owned pins, open-drain mask, filter mask) of a program, as PinOwners records them."""
+def image_pins(prog: Program, **overrides) -> tuple[int, int, int, int]:
+    """(owned pins, pins it sets up, open-drain mask, filter mask) of a program, as PinOwners records them."""
+    c = dict(prog.config)
+    c.update(overrides)
     od, filt = pad_masks(prog, **{k: v for k, v in overrides.items() if k in ("od_pins", "filter_pins")})
-    return owned_pins(prog, **overrides), od, filt
+    return owned_pins(prog, **overrides), pin_mask(c.get("dirs_pins")), od, filt
 
 
 OUTPUT_PINS = ((1 << 19) - 1) & ~0x1F  # PIN5..PIN18: the pins an engine can drive
+UIO_PINS = 0xFF << 11  # PIN11..PIN18: the pins that can be released (PIN5..PIN10 always drive)
 
 
 def owned_pins(prog: Program, **overrides) -> int:
@@ -166,32 +169,36 @@ class PinOwners:
     program onto the engine, or freeing it, has to release the pins its previous program drove and
     clear the open-drain and filter bits that only that program needed; this class works out those
     writes. Pins and pad bits used by another engine's program, or set by the host outside any
-    program, are left alone.
+    program, are left alone. A pin the new program sets up itself (`.pins dirs=`) goes straight from
+    its old level to its new one, without a release in between, unless its open-drain bit is about to
+    be cleared. PIN5..PIN10 have no output enable (released, they would drive 0), so they keep their
+    level until the new program sets it.
     """
 
     def __init__(self):
-        self.images: dict[int, tuple[int, int, int]] = {}  # sm -> (owned pins, open drain, filter)
+        self.images: dict[int, tuple[int, int, int, int]] = {}  # sm -> (owned, dirs, open drain, filter)
 
-    def others(self, sm: int) -> tuple[int, int, int]:
-        owned = od = filt = 0
-        for k, (o, d, f) in self.images.items():
+    def others(self, sm: int) -> tuple[int, int, int, int]:
+        acc = [0, 0, 0, 0]
+        for k, image in self.images.items():
             if k != sm:
-                owned, od, filt = owned | o, od | d, filt | f
-        return owned, od, filt
+                acc = [a | b for a, b in zip(acc, image)]
+        return tuple(acc)
 
-    def handoff(self, sm: int, new: tuple[int, int, int] | None, en: int, od: int, filt: int):
+    def handoff(self, sm: int, new: tuple[int, int, int, int] | None, en: int, od: int, filt: int):
         """Writes that disable engine `sm`, release its old program's pins and set the pad modes for
-        `new` = (owned, od, filter) of the program about to be loaded (None: free the engine).
+        `new` = (owned, dirs, od, filter) of the program about to be loaded (None: free the engine).
 
         `en`, `od` and `filt` are the current CTRL.EN, PAD_OD and PAD_FILT values. Returns
         (frames, new PAD_OD, new PAD_FILT) and records `new` for engine `sm`.
         """
-        o_owned, o_od, o_filt = self.others(sm)
-        old_owned, old_od, old_filt = self.images.get(sm, (0, 0, 0))
-        n_owned, n_od, n_filt = new or (0, 0, 0)
+        o_owned, _, o_od, o_filt = self.others(sm)
+        old_owned, _, old_od, old_filt = self.images.get(sm, (0, 0, 0, 0))
+        n_owned, n_dirs, n_od, n_filt = new or (0, 0, 0, 0)
+        od_clear = old_od & ~o_od & ~n_od
         ops: list[tuple[int, list[int], bool]] = [(R.addr("CTRL"), [en & ~(1 << sm) & 0xF], False)]
         # Release first: an open-drain bit is only cleared once its pin is no longer driven.
-        ops += release_ops(sm, old_owned & ~o_owned)
+        ops += release_ops(sm, old_owned & ~o_owned & UIO_PINS & (~n_dirs | od_clear))
         od2 = (od & ~(old_od & ~o_od)) | n_od
         filt2 = (filt & ~(old_filt & ~o_filt)) | n_filt
         if od2 != od:
@@ -518,9 +525,9 @@ def build_image(source: str, program: str, sm: int, origin: int = 0, defines: di
     from .asm import assemble_file
     prog = assemble_file(source, defines)[program]
     frames = [[a, w, inc] for a, w, inc in load_ops(prog, sm, origin, **overrides)]
-    owned, od, filt = image_pins(prog, **overrides)
+    owned, dirs, od, filt = image_pins(prog, **overrides)
     return {"format": IMAGE_FORMAT, "program": program, "sm": sm, "origin": origin, "length": len(prog.code),
-            "frames": frames, "owned": owned, "od": od, "filter": filt, "labels": prog.labels,
+            "frames": frames, "owned": owned, "dirs": dirs, "od": od, "filter": filt, "labels": prog.labels,
             "note": "Before the frames, hand the engine over (PinOwners.handoff: release the pins of the "
                     "program it replaces, then set od and filter in PAD_OD and PAD_FILT); OR the other "
                     "engines' CTRL.EN bits into every CTRL frame"}

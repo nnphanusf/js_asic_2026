@@ -116,3 +116,25 @@ def test_release_keeps_the_other_engine(driver):
     assert lo | (hi << 16) == 0
     assert d.read(R.addr("CTRL"))[0] & 3 == 0b10  # SM1 still running
     assert bench.pin(13) == 1 and bench.pin(14) == 1
+
+
+@pytest.mark.parametrize("driver", DRIVERS)
+@pytest.mark.parametrize("name, file, pins", [("uart_tx", "uart", (9,)), ("spi_ctrl_cpha0", "spi", (11, 12, 14))])
+def test_reloading_an_engine_moves_no_pin(name, file, pins, driver):
+    """Reloading an engine (another divider, say) leaves the pins the program sets up at their level:
+    no release in between, which would put a start bit on a UART line (PIN5..PIN10 drive 0 when
+    released) or an edge on SPI's SCK."""
+    bench = Bench(trace=True)
+    d = DRIVERS[driver](bench)
+    prog = load_program(name, file=file)
+    d.load(prog, 0, origin=0, clkdiv=2)
+    d.enable(1)
+    bench.run(100)
+    d.disable(1)
+    start = len(bench.trace)
+    d.load(prog, 0, origin=0, clkdiv=15)
+    d.enable(1)
+    bench.run(50)
+    for pin in pins:
+        levels = {(p >> pin) & 1 for p in bench.trace[start:]}
+        assert len(levels) == 1, f"PIN{pin} moved while the engine was reloaded"
