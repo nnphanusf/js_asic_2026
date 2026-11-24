@@ -6,12 +6,13 @@
 |---|---|
 | Process, size | IHP SG13CMOS5L, Tiny Tapeout 8x4 tiles |
 | Clock | 50 MHz (`CLOCK_PERIOD` 20 ns), met in all three corners after routing. This is the planned fallback: the first routed run missed the original 60 MHz target in the slow and typical corners (history below) |
-| Timing after routing (LibreLane STA, 50 MHz) | no setup or hold violation in any corner; worst register-to-register setup slack under 1 ns in the slow corner (1.08 V, 125 °C), about 8 ns typical (1.2 V, 25 °C), over 10 ns fast; no max-cap violations, 6 max-slew violations in the slow corner (a warning in this flow) |
-| Cells after place and route | 21 201 standard cells (fill and tap cells excluded): 2 201 flip-flops, 4 846 buffers, 2 261 hold delay cells; placement utilisation 24.8 % |
+| Timing after routing (LibreLane STA, 50 MHz) | no setup or hold violation in any corner. Worst setup / hold slack: slow (1.08 V, 125 °C) +0.93 / +0.60 ns, typical (1.2 V, 25 °C) +8.02 / +0.29 ns, fast +12.07 / +0.11 ns, against a 20 ns propagated clock with 0.25 ns uncertainty and 4 ns input and output delays (post-route STA of the 2026-11-24 run, from its `GDS_logs` as read by the second independent review) |
+| Design-rule checks in the STA (warnings in this flow) | no max-cap violations; 6 max-slew violations in the slow corner, all on one NOR4 output net (2.602 ns against a 2.507 ns limit, 0.094 ns over); 171 max-fanout violations per corner against the flow's limit of 8 (one clock-tree leaf drives 17 loads). None fails timing, and none can change without a new layout |
+| Cells after place and route | 21 201 standard cells in the place-and-route cell table (fill and tap cells excluded): 2 201 flip-flops, 4 846 buffers, 2 261 hold delay cells; placement utilisation 24.8 %. The flow's final metrics count 21 318 instances and 27.9 % utilisation: a later stage, with more cell classes counted |
 | Cells (Yosys + ABC, IHP typical library) | 14 922, about 243 000 um2 |
 | Routing | 1.54 m of wire after detailed routing, zero violations; global routing Metal2 39 %, Metal3 46 %, Metal4 3 %, no overflow |
 | Power (LibreLane IR report, typical corner, default switching activity) | 8.1 mW; worst IR drop 0.2 mV (0.02 %) |
-| Critical path estimate (ABC delay-driven mapping, slow 1.08 V / 125 C, no wire load) | 6.47 ns (7.57 ns before the timing fixes); routed wires add far more, see the history |
+| Critical path estimate (ABC delay-driven mapping, slow 1.08 V / 125 C, no wire load) | 6.47 ns (7.57 ns before the timing fixes); routed wires add far more, see the history. The routed worst path starts at the host write address instead ([architecture.md](architecture.md#timing)) |
 | Engines | 2, sharing a 64 x 16-bit instruction memory |
 | Protocols demonstrated | 12 (table below), plus two at once |
 
@@ -50,7 +51,12 @@ directions. At 50 MHz the USB divider is fractional (33.3 clocks per bit, 0.04 %
 by up to one 20 ns clock. `usb_rx` synchronizes once, on the first K of SYNC, and does not follow later edges: it
 receives an 8-byte DATA packet (the longest low-speed packet) from a sender within ±0.4 % of 1.5 Mbit/s, and a
 handshake within ±2 %. The USB specification lets a low-speed device be 1.5 % off, so `usb_rx` suits crystal or
-PLL-clocked peers, not ones with a ceramic resonator.
+PLL-clocked peers, not ones with a ceramic resonator. `usb_tx` starts a packet at its first word and stalls on the
+wire if a later word is late, so the host queues each packet with `push_packet`: it stops the engine, preloads the
+8-word FIFO and streams the rest, which then has about 43 µs for an 8-byte DATA packet. Through the host port at
+SCK = clk/16 that works at 50 MHz (tested in RTL and in `test_clock_and_host_timing.py`); streaming the words as
+the FIFO drains does not. Handshakes, tokens and empty DATA packets fit the FIFO whole, so the bit-banged
+demo-board driver can send those, but not longer DATA packets.
 
 The 60 MHz simulations have ideal pads. On the board, a signal that the external device returns in answer to an
 engine's clock edge (SPI MISO, JTAG TDO, SWD reads) has two ticks minus the two-cycle input synchronizer to arrive:
@@ -62,15 +68,15 @@ board's delays are measured, run these programs at clkdiv 4 or more (SCK, TCK or
 | UART 8N1 / 8E1 TX | `uart_tx` (4) | 1 | 9600 – 921 600 baud | 8 ticks per bit: 6.25 Mbaud at clkdiv 1 (50 MHz) |
 | UART RX | `uart_rx` (11) | 1 | 9600 – 921 600 baud | samples mid-bit, framing error flag |
 | SPI controller, modes 0–3 | `spi_ctrl_cpha0/1` (11) | 1 | 1 MHz, 7.5 MHz (60 MHz clock) | 4 ticks per bit: 6.25 MHz at clkdiv 2 (50 MHz) with ideal pads; clkdiv 4 or more on the board (see above) |
-| SPI target, mode 0 | `spi_target` (23) | 1 | 1 MHz, 2.5 MHz | about 3 MHz SCK |
+| SPI target, mode 0 | `spi_target` (34) | 1 | 1 MHz, 2.5 MHz | about 3 MHz SCK; MISO driven only while CS is low, so targets can share it; a byte cut short by CS is dropped |
 | I2C controller | `i2c_ctrl` (27) | 1 | 100 kHz, 400 kHz | all standard/fast-mode timing limits met, also when a target stretches SCL before or after the ACK; bit split 5/5 ticks (standard) or 6/4 (fast) |
-| I2C target | `i2c_cond` (19) + `i2c_target` (41) | 2 | 100 kHz, 400 kHz | clock stretching while the host supplies read data |
-| WS2812 | `ws2812` (4) | 1 | 857 kHz | 833 kHz at 50 MHz: T0H 360 ns, T1H 840 ns (857 kHz, 350 / 817 ns at 60 MHz) |
+| I2C target | `i2c_cond` (19) + `i2c_target` (42) | 2 | 100 kHz, 400 kHz | clock stretching while the host supplies read data; each data bit is on SDA 16 cycles (320 ns at 50 MHz) before SCL is released |
+| WS2812 | `ws2812` (4) | 1 | 857 kHz | 833 kHz at 50 MHz: T0H 360 ns, T1H 840 ns (857 kHz, 350 / 817 ns at 60 MHz); 300 µs low between frames latches every revision, including the WS2812B-V5 (> 280 µs) |
 | JTAG controller | `jtag` (2) | 1 | TCK 7.5 MHz, 1.7 MHz (60 MHz clock) | 4 ticks per TCK: 6.25 MHz at clkdiv 2 (50 MHz) with ideal pads |
-| SWD controller | `swd` (16) | 1 | SWCLK 3.75 MHz | 4 ticks per SWCLK |
-| PS/2 receiver | `ps2_rx` (6) | 1 | 12.5 kHz device clock | glitch filter on CLK, watchdog drops cut frames |
+| SWD controller | `swd` (16) | 1 | SWCLK 3.75 MHz | 4 ticks per SWCLK; JTAG-to-SWD switch tested against a target that starts in JTAG; `swd_transfer` reads the ACK first and retries on WAIT |
+| PS/2 receiver | `ps2_rx` (8) | 1 | 12.5 kHz device clock | glitch filter on CLK; the watchdog drops a frame cut short with CLK left high or held low |
 | CAN 2.0A | `can_tx` (29), `can_rx` (12) | 1 each | 500 kbit/s, 1 Mbit/s | 10 ticks per bit; stuffing (including a stuff bit after the CRC) and CRC15 in the BAU; hard sync on SOF only |
-| Low-speed USB packets | `usb_tx` (26), `usb_rx` (14) + `usb_se0` (7) | 1, 2 | 1.5 Mbit/s | NRZI, stuffing, CRC16 in the BAU; packet level, not a device stack; receive tolerance ±0.4 % (see above) |
+| Low-speed USB packets | `usb_tx` (26), `usb_rx` (14) + `usb_se0` (7) | 1, 2 | 1.5 Mbit/s | NRZI, stuffing, CRC16 in the BAU; packet level, not a device stack; receive tolerance ±0.4 %; transmit needs each packet preloaded (see above) |
 | 1-Wire master | `onewire` (28) | 1 | standard speed | presence detection with a timed WAIT |
 | SPI + I2C at once | 38 instructions in total | 2 | as above | one shared host port |
 
@@ -90,6 +96,7 @@ the `gds` workflow's LibreLane reports.
 
 | Date | Design state | Cells | Notes |
 |---|---|---|---|
+| 2026-11-24 | First review's fixes, same RTL and netlist (68e38d0) | unchanged | **All green: `gds`, `precheck`, `gl_test`, `viewer`** on `main` and `phase0-setup`. `gl_test` now compares every output against the reference model on every cycle from reset (lock-step) and matched on all 56 tests on the routed netlist. Post-route STA from this run's `GDS_logs`, read by the second independent review: setup slack +0.9305 ns slow, +8.0179 ns typical, +12.0699 ns fast; hold +0.6038, +0.2852, +0.1070 ns; 171 max-fanout and 6 max-slew (slow) design-rule warnings. The second review's findings were all in firmware, host software and docs. |
 | 2026-11-20 | Timing fixes and 50 MHz, GDS (144966f) | 21 201 cells after place and route: 2 201 flip-flops, 4 846 buffers, 2 261 hold delay cells | **All green: `gds`, `precheck`, `gl_test`, `viewer`.** Build 30 min (the first two-engine run took 4 h 46 min); detailed routing 18 min, from 10 927 violations after the first pass to zero after the sixth; precheck 62 min; gate-level tests on the routed netlist 18 min. Global routing: Metal2 39 %, Metal3 46 %, Metal4 3 %, no overflow (first two-engine run: Metal3 79.7 % with 14 446 overflow); 1.95 m of global wire, 1.54 m after detailed routing. Placement-based timing after CTS: no setup violation; 2 028 hold endpoints fixed with 2 261 delay cells; the timing repair after global routing found no setup or hold violation left. Routed STA: setup and hold met in all corners, worst reg-to-reg setup slack under 1 ns slow, about 8 ns typical; 0 max-cap, 6 max-slew violations (slow corner). LVS, antenna (after 47 diodes) and illegal-overlap checks clean. IR drop 0.02 %, 8.1 mW typical. The log cuts the slack columns at one digit; exact values are in the run's `GDS_logs` artifact. |
 | 2026-11-20 | Timing fixes on the two-engine design | 14 922 IHP cells (Yosys + ABC, typ corner), 242 717 um2 | RTL, both exact: the divider's `cnt == 0` is a registered flag (proved in `formal/clkdiv.sby`), and the instruction-memory ports read each word's next value, so no compare or bypass mux follows the 64:1 read (Yosys equivalence proof). Delay-driven ABC estimate of the slow-corner logic path 7.57 → 6.47 ns; the longest path now starts at the instruction register instead of the divider counter. Flow: `CLOCK_PERIOD` 20 (the 50 MHz fallback), design-rule and timing repair after global routing, 800 um maximum wire length, Magic DRC off (the precheck job runs the PDK's KLayout SG13CMOS5L deck, the DRC Tiny Tapeout signs off on for IHP). GDS result in the row above. |
 | 2026-11-19 | Two engines, first GDS (297df42) | 24 076 instances after place and route, 2 199 flip-flops, 2 159 hold-fix delay cells | **Routed; failed setup at 60 MHz.** 4 h 46 min. Global routing: Metal2 70.2 %, Metal3 79.7 % with 14 446 overflow (Metal3 is the only horizontal signal layer), Metal4 29.7 %; 3.95 m of global wire, 2.81 m after detailed routing. Detailed routing took 3 h 23 min from 37 679 violations after the first pass to zero. Magic DRC (59 min), LVS and antenna clean; no hold violation in any corner. Setup: the placement-based timing after CTS showed none, the routed design failed in the slow and typical corners (typical: 12 endpoints) and passed in the fast corner (reg-to-reg worst slack about +4 ns); max-slew and max-cap violations in all corners. The log's timing table is cut at 80 columns, so the exact slacks are only in the run's `GDS_logs` artifact. |

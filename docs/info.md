@@ -59,18 +59,30 @@ Each SPI frame is `[command] [address] [16-bit data words...]`. Command bit 7 se
 auto-increments the address after every word. While the command and address bytes are shifted in, MISO returns the
 ID byte `0xB7` and a FIFO status byte. Register `0x00` reads `0xB717`.
 
-1. Hold `rst_n` low, then release it. All protocol pins start as inputs and nothing is driven until the host
-   writes to the chip.
+1. Hold `rst_n` low, then release it. Until the host first pulls `HOST_CS_N` low (proved formally,
+   `formal/quiet.sby`):
+   * PIN0..PIN4 (`ui_in[4:0]`) are inputs, as always.
+   * PIN5..PIN10 (`uo_out[5:0]`) are dedicated outputs and drive 0. They have no output enable, so never
+     connect them to another driver.
+   * PIN11..PIN18 (`uio[7:0]`) are released (`uio_oe` = 0); no pad is open drain or filtered.
+   * `HOST_MISO` and `HOST_IRQ` drive 0.
 2. Write a program into instruction memory (addresses `0x80`..`0xBF`).
-3. For pins that are open drain (I2C, 1-Wire, PS/2), set `PAD_OD` (`0x16`/`0x17`) first. Then set the
-   program's output pins as outputs: either with `PIN_OE` (`0x14`/`0x15`), or through the engine by writing
-   `set pindirs, 1` to its `EXEC` register (offset `0xC`) with `SET_BASE` pointing at the pin. An engine only
-   drives pins whose direction is output.
+3. For pins that are open drain (I2C, 1-Wire, PS/2), set `PAD_OD` (`0x16`/`0x17`) first. Then give each
+   output pin its idle level and only then make it an output: with `PIN_OUT` then `PIN_OE` (`0x12`/`0x13`,
+   `0x14`/`0x15`), or through the engine: point `SET_BASE` at the pin and set `SET_COUNT` to 1 (`PINCTRL0`,
+   `PINCTRL1`), then write `set pins, <level>` and `set pindirs, 1` to its `EXEC` register (offset `0xC`).
+   An engine only drives pins whose direction is output.
 4. Configure the engine (registers at `0x20 + 0x10 * n`: clock divider, wrap range, pin bases), restart it with
    `CTRL.RESTART` (`0x02` bits 5:4, one per engine) and enable it with `CTRL.EN` (bits 1:0).
 5. Push data to its TX FIFO and read results from its RX FIFO (offset `0xB` in the engine's register block).
 
-`bitweaver.loader` and the demo-board driver do steps 2 to 4 for you, and set `PAD_OD` before any pin.
+Disabling or restarting an engine does not release its pins or clear its pad modes. Before giving the pins to
+another program, release them (`set pindirs, 0` through the engine, or `PIN_OE`) and clear the open-drain and
+filter bits nothing needs any more, in that order.
+
+`bitweaver.loader` and the demo-board driver do steps 2 to 4 for you. They set `PAD_OD` before any pin, and
+loading a program onto an engine first releases the pins of the program it replaces that the new one does not
+set up itself, so a reloaded UART or SPI line does not glitch (`release(sm)` frees an engine).
 
 For example, `sw/programs/uart.bw` turns SM0 into a UART transmitter on `uo_out[4]` and SM1 into a receiver on
 `ui_in[3]`, the pins wired to the demo board's UART. The `sw/bitweaver` Python package assembles programs and

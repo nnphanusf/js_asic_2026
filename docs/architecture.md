@@ -77,6 +77,13 @@ Every output pin has a level bit (`PIN_OUT`) and an enable bit (`PIN_OE`). The h
 change them with `OUT`/`MOV`/`SET PINS`/`PINDIRS` and side-set. All writers of a cycle are merged with a fixed
 priority (SM1 > SM0 > host), so a write never needs a read-modify-write.
 
+Disabling or restarting an engine keeps its pins driven and its pad modes set: the pin registers are global,
+not per engine. Handing pins to another program therefore means releasing them and then clearing the open-drain
+and filter bits nobody needs; the loaders do this whenever a program replaces another on an engine
+(`bitweaver.loader.PinOwners`). A pin the new program sets up itself is not released in between, so reloading
+an engine does not glitch its lines. After reset, PIN5..PIN10 are dedicated outputs driving 0 (they have no
+output enable, so "released" would mean driving 0), and PIN11..PIN18 are released.
+
 In **open-drain mode** (`PAD_OD`, PIN11..PIN18) the pad's output value is forced to 0 and the level bit only
 controls the enable: level 0 pulls the line low, level 1 releases it. An open-drain pin can never drive high;
 this is proved formally (`formal/opendrain.sby`). I2C, 1-Wire, PS/2 and clock stretching all rely on it.
@@ -104,13 +111,19 @@ MISO      [ ID 0xB7             ][ status ][ read data      ][ ...  ]
   with a two-byte frame.
 * A write takes effect about four clock cycles after the SCK rising edge of its last data bit (two cycles of
   synchronizer, one to detect the edge, one registered write strobe).
-* A read word is latched on the SCK falling edge before its first bit, and its side effect (an RX FIFO pop) only
-  happens when the host clocks that word's first bit, and only if the FIFO held data when the word was latched.
-  A frame that ends early never consumes data. Reading an empty FIFO returns 0 and sets `FDEBUG.RXUNDER`.
-* Raising CS_N at any time returns the port to idle within one cycle (proved formally: `formal/host_spi.sby`).
-* The FIFO status byte is sampled once per frame. A long burst of FIFO writes in one frame is not flow
-  controlled; a push to a full TX FIFO is dropped and sets the sticky `FDEBUG.TXOVER` flag, so keep a burst no
-  longer than the free space the status byte reported, or check `FDEBUG` afterwards.
+* A read word is latched on the SCK falling edge before its first bit. Its side effect (an RX FIFO pop) is
+  committed at that word's first data bit (the synchronized SCK rising edge), and only if the FIFO held data
+  when the word was latched. So a frame that ends before a word's first bit consumes nothing, and one that ends
+  after it consumes the word even if the host stops after a single bit. Reading an empty FIFO returns 0 and
+  sets `FDEBUG.RXUNDER`.
+* CS_N, SCK and MOSI pass the same 2-flip-flop synchronizer, so the port sees each pin two to three cycles
+  late. Keep CS_N low for at least three clock cycles before the first SCK rising edge and after the last SCK
+  falling edge, and high for at least three cycles between frames. Once the synchronized CS_N is high, the
+  port is idle within one cycle (proved formally: `formal/host_spi.sby`).
+* The FIFO status byte is sampled once per frame and says only that a TX FIFO has room for at least one
+  word. A long burst of FIFO writes in one frame is not flow controlled; a push to a full TX FIFO is dropped and
+  sets the sticky `FDEBUG.TXOVER` flag. Size a burst of more than one word from the TX level in `STAT`, or
+  check `FDEBUG` afterwards.
 * `HOST_IRQ` is combinational logic of registered flags, so it can glitch briefly when several flags change in
   the same cycle. Use a level-sensitive interrupt on the host (or read `INT_STAT`), not a single edge.
 
@@ -220,6 +233,13 @@ register. Two exact changes shortened it without changing behaviour on any cycle
   value by construction, so no address compare or bypass mux follows the 64:1 read (proved equivalent to the
   previous memory with Yosys `equiv_induct`).
 
+That path is what synthesis (ABC, no wires) ranks first. In the routed design the worst slow-corner path of the
+signed-off build starts elsewhere: at the host port's write address (`u_host.wr_addr[4]`), and ends at SM0's
+instruction register (argument bit 2). Because each port reads a word's next value, the host's write address
+reaches the instruction register through the same 64:1 read as the fetch.
+Its slack is +0.93 ns at 50 MHz (post-route STA of the 2026-11-24 run, as read by the second independent
+review); a faster clock would have to shorten both starting points.
+
 The layout matters more than the logic. Metal3 is the only horizontal signal layer in a Tiny Tapeout IHP tile,
 and global routing left it at 80 % use with overflow, so routed wires detour far from what placement estimated:
 in the first two-engine run the placement-based timing after clock-tree synthesis showed no setup violation at
@@ -238,7 +258,7 @@ slow corner and about 8 ns in the typical corner ([results.md](results.md)).
   not read it directly; to check a word, point a disabled engine at it with an injected `JMP` and read the
   engine's `EXEC` register (`Driver.read_imem`). Programs are position
   independent (jumps are relative to `ORG`), so the host packs several programs into the memory.
-* **Jumps reach 32 instructions**, programs may be up to 64 long (the I2C target is 41).
+* **Jumps reach 32 instructions**, programs may be up to 64 long (the I2C target is 42).
 * **Fixed write priority between engines** instead of pin ownership registers: simple, deterministic, and
   documented.
 * **The host port is a register-mapped SPI target**, so the same driver works from the demo board's RP2040/RP2350,

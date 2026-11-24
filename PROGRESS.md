@@ -3,6 +3,60 @@
 Deadline 2027-01-18 (RTL freeze 2027-01-08). This file is the running log:
 what is done, what is next, and every decision with its reason.
 
+## Second independent review (2026-11-24, commit 68e38d0)
+
+A second audit, by another AI assistant working read-only from the same brief, checked the first review's fixes
+(it confirmed the CAN, I2C controller, loader, board-driver, assembler and USB receive fixes) and reproduced the
+test, lint and CI results. It found no RTL failure. Its 16 findings were in the protocol programs, the host
+software and the documentation. Each high-severity one was reproduced here before the fix (the I2C target's false
+repeated START, the USB transmit underrun at clk/16 with the exact bit count it reported, the stale pin drivers
+and `PAD_OD` 0x6000 after switching protocols, the SPI target's MISO), and each fix has a test that fails without
+it. No RTL file changed.
+
+**Fixed.**
+- **I2C target: data set-up after a stretch.** The target put a data bit on SDA in the same cycle it released a
+  stretched SCL. A first bit of 0 then fell while SCL rose: the bus monitor saw a repeated START with 0 ns set-up.
+  The bit now goes out with SCL held low, and SCL is released 16 cycles later (320 ns at 50 MHz, over the 250 ns
+  tSU;DAT of standard mode). The target test reads a stretched 0x19.
+- **SPI target: MISO only while selected.** MISO was enabled at load and never released, so two targets on one
+  MISO line would fight. The program releases MISO whenever CS is high, also mid-byte; a byte cut short by CS
+  is dropped both ways (34 instructions, was 23).
+- **USB transmit at clk/16.** Streaming a 13-word DATA packet as the FIFO drained left the engine without a word
+  mid-packet (103 raw bits, a stuffing error, a bad CRC). `push_packet` (loader, board driver, testbench) waits
+  for the previous packet, stops the engine, preloads the 8-word FIFO and streams the rest (about 43 µs of slack
+  for 8 bytes). Packets of up to 8 words have no deadline; the bit-banged board port can send only those, which
+  the program header and `results.md` say. Tested in RTL at 50 MHz with the host at clk/16.
+- **Pin hand-over between programs.** Disabling an engine keeps its pins and pad modes, and the loaders only
+  added bits: I2C then SPI left SCK open drain, SPI target then controller left MISO driven. The loaders now
+  release the replaced program's pins and clear the pad bits only it needed (`PinOwners`), and `release(sm)`
+  frees an engine. A pin the new program sets up itself is not released in between: the first version did
+  that, and the full cocotb run caught it (a reloaded UART TX line, PIN9, dropped to 0 and sent a false start
+  bit; SPI's SCK got an edge). Load images carry a format number and their pins; the board driver refuses
+  older images before writing anything.
+- **SWD.** `jtag_to_swd` put eight idle cycles between the high cycles and the select word, so a target in JTAG
+  mode never switched (ADIv5 B5.2.2). The new `swd_transfer` reads the ACK before the data phase, retries on
+  WAIT and sends no data after WAIT or FAULT. The SWD model now starts in JTAG mode and can answer WAIT.
+- **PS/2:** the wait for CLK high had no timeout, so a frame cut off with CLK held low (the host inhibiting) left
+  its bits in the ISR for the next frame. Both waits are timed now.
+- **WS2812:** the documented latch time was the original part's 50 µs; the WS2812B-V5 needs over 280 µs. The
+  gap is now 300 µs (`WS2812_RESET_US`) and the test decoder checks the low time itself.
+- **Host helpers:** the decoders check every packet's length (a token with no field, a CAN header with no data,
+  an ACK with an extra byte); CAN remote frames have no data field (`dlc` gives the requested length); the
+  assembler rejects shift thresholds above 16.
+- **Docs:** the reset state per pin type (PIN5..PIN10 drive 0 and have no output enable); manual bring-up sets
+  the idle level before the direction and `SET_COUNT` with `SET_BASE`; the host read commits at a word's first
+  data bit, CS set-up and hold, and the status byte only means "room for one"; the physical summary gives exact
+  slack, the fanout and slew warnings and which stage each cell count comes from; the routed critical path starts
+  at the host write address, not where synthesis put it.
+
+**Not changed.**
+- The physical numbers above (slack to four decimals, 171 fanout warnings, the routed critical path) are quoted
+  from the review, which read them in the run's `GDS_logs` archive; downloading that archive needs a GitHub
+  sign-in, so they were not re-read here. They agree with the summary numbers already recorded.
+- Fixing the fanout and slew warnings would need a new layout and sign-off; none fails timing.
+- A USB packet encoding that fits an 8-byte DATA packet in the FIFO, so the board driver could send it: a
+  firmware redesign, left for later.
+
 ## Independent review (2026-11-24)
 
 An independent review of the repository, run with a second AI assistant from a written audit brief, reproduced
@@ -125,9 +179,11 @@ The software and docs around it:
 Full numbers are in `docs/results.md`.
 
 **Verification.**
-- pytest: 119 tests (77 at the time of this report; 16 added on 2026-11-23, 26 on 2026-11-24).
-- cocotb: 56 tests, all in cycle-by-cycle lock-step with the simulator. The same 56 pass on the routed netlist in
-  CI and on the local Yosys/IHP netlist (since 2026-11-24 also in lock-step).
+- pytest: 143 tests (77 at the time of this report; 16 added on 2026-11-23, 26 with the first review and 24 with
+  the second on 2026-11-24).
+- cocotb: 58 tests (two added with the second review), all in cycle-by-cycle lock-step with the simulator. The 56
+  of 68e38d0 passed on the routed netlist in CI in lock-step, and on the local Yosys/IHP netlist; the 58 run on
+  the routed netlist with every push.
 - Constrained-random lock-step (Verilator): 100M cycles over 1000 seeds with no mismatch; CI runs 10M cycles on
   every push.
 - Coverage: functional 465/465 bins, line 100 % (285/285), toggle 98.3 % (8444/8590). The 146 untoggled points

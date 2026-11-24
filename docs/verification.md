@@ -23,20 +23,26 @@ next-state value from the current state and the inputs sampled at the clock edge
 lock-step (layer 2) shows that the RTL implements the model exactly, and the independent protocol models (layer 3)
 are what show that the model itself does the right thing.
 
-The pytest suite (`make -C sw test`, 119 tests) checks the assembler encodings and error messages, a
+The pytest suite (`make -C sw test`, 143 tests) checks the assembler encodings and error messages, a
 disassemble/re-assemble round trip over the whole 16-bit encoding space, the generated files
 (`src/bw_defs.vh`, `docs/regmap.md` must match `regmap.py`), each documented instruction rule on the ISS, that
 every program in `sw/programs` assembles, and the MicroPython board driver against the ISS.
 `sw/tests/test_loader_safety.py` checks on every clock cycle that loading a program never drives an open-drain pin
-high (the loaders set `PAD_OD` before any pin), and that reading instruction memory through an engine moves no
-pin.
+high (the loaders set `PAD_OD` before any pin), that reading instruction memory through an engine moves no
+pin, and that loading another program onto an engine hands its pins over: I2C, then SPI controller, then SPI
+target on one engine leaves no stale driver and no stale open-drain bit, and freeing one engine keeps the other's
+pins. The board-driver tests also check that an image from an older loader is refused before anything is written.
+`sw/tests/test_proto_helpers.py` covers the host-side protocol helpers: the decoders reject short and over-long
+packets instead of raising, CAN remote frames carry no data field, the JTAG-to-SWD sequence has no gap before
+the select word, and an ACK-aware SWD write puts no data on the wire after WAIT or FAULT.
 
 `sw/tests/test_clock_and_host_timing.py` covers what the 60 MHz cocotb runs with ideal pads cannot: it runs the
 ISS with 20 ns cycles (the rated 50 MHz) and checks the WS2812 pulse widths at 40, 50 and 60 MHz, 1-Wire reads
 against a device that releases a 0 at 16 µs (and that the old 60 MHz divider would misread it), the CAN bit
 rates, USB packets in both directions (`usb_tx` exact, edges within one clock of the divider's grid; `usb_rx`
-with the sender 0.4 % slow or fast, at four phases), and the host port's read margin with `SpiDriver(miso_delay=...)`: at SCK clk/8 a single cycle of
-MISO delay breaks reads, at clk/16 four cycles still work.
+with the sender 0.4 % slow or fast, at four phases; `usb_tx` packets back to back through the SPI host port at
+SCK = clk/16 with `push_packet`), and the host port's read margin with `SpiDriver(miso_delay=...)`: at SCK clk/8
+a single cycle of MISO delay breaks reads, at clk/16 four cycles still work.
 
 ## 2. Lock-step: RTL against the ISS
 
@@ -76,14 +82,14 @@ of the wire* that knows nothing about Bitweaver:
 | Protocol | Program | Reference model | What is checked |
 |---|---|---|---|
 | UART 8N1/8E1 | `uart.bw` | cocotbext-uart (third party) | 9600–921600 baud TX and RX, parity, framing error, full duplex |
-| SPI | `spi.bw` | cocotbext-spi SpiMaster; `StreamTarget` on cocotbext-spi's SpiSlaveBase | controller modes 0–3 at 1 and 7.5 MHz, multi-byte frames; target mode 0 at 1 and 2.5 MHz |
-| I2C | `i2c.bw` | `test/lib/i2c_bfm.py` (from NXP UM10204) | 100 kHz / 400 kHz, every standard- and fast-mode timing limit, ACK/NACK, repeated START, clock stretching both ways (by the target before and after the ACK), stretch timeout |
-| WS2812 | `ws2812.bw` | pulse-width decoder from the WS2812B datasheet | T0H/T1H/bit period limits, reset latch |
+| SPI | `spi.bw` | cocotbext-spi SpiMaster; `StreamTarget` on cocotbext-spi's SpiSlaveBase | controller modes 0–3 at 1 and 7.5 MHz, multi-byte frames; target mode 0 at 1 and 2.5 MHz, MISO released while deselected and after a byte cut short by CS |
+| I2C | `i2c.bw` | `test/lib/i2c_bfm.py` (from NXP UM10204) | 100 kHz / 400 kHz, every standard- and fast-mode timing limit, ACK/NACK, repeated START, clock stretching both ways (by the target before and after the ACK, and by Bitweaver's target before a byte starting with 0 or 1), stretch timeout |
+| WS2812 | `ws2812.bw` | pulse-width decoder from the WS2812B datasheet | T0H/T1H/bit period limits; a frame ends only after 280 µs low (WS2812B-V5), and any other gap must be a bit |
 | JTAG | `jtag.bw` | IEEE 1149.1 TAP model (16-state controller, IR, IDCODE, BYPASS, user register) | IDCODE read, IR capture, register write/read-back, BYPASS delay |
-| SWD | `swd.bw` | Arm ADIv5 SW-DP model | line reset, DPIDR, power-up handshake, posted AP reads, parity, malformed request |
-| PS/2 | `ps2.bw` | keyboard model | frames, odd parity, glitches on CLK (filter), aborted frame (WAIT timeout) |
+| SWD | `swd.bw` | Arm ADIv5 SW-DP model, starting in JTAG mode | the exact JTAG-to-SWD switch (the old sequence is shown to fail), line reset, DPIDR, power-up handshake, posted AP reads, parity, malformed request, WAIT with no data phase |
+| PS/2 | `ps2.bw` | keyboard model | frames, odd parity, glitches on CLK (filter), aborted frames with CLK left high or held low for 360 µs (WAIT timeouts) |
 | CAN 2.0A | `can.bw` | CAN node with its own encoder, stuffing and CRC15, wired-AND bus | TX and RX at 500 kbit/s and 1 Mbit/s, worst-case stuffing, a stuff bit after the last CRC bit (both levels), recessive CRC delimiter, ACK and missing ACK |
-| USB low speed | `usb.bw` | USB 2.0 line model with spec-literal CRC5/CRC16 | DATA0/1 (incl. all-0xFF stuffing, zero length), ACK, IN, SETUP; NRZI, stuffing, EOP, bus release |
+| USB low speed | `usb.bw` | USB 2.0 line model with spec-literal CRC5/CRC16 | DATA0/1 (incl. all-0xFF stuffing, zero length), ACK, IN, SETUP; NRZI, stuffing, EOP, bus release; transmit at 50 MHz with the host port at SCK = clk/16 |
 | 1-Wire | `onewire.bw` | Maxim 1-Wire device (ROM, scratchpad) | reset/presence, ROM with CRC8, write/read, absent device timeout |
 | Concurrency | SPI controller + I2C controller (400 kHz) | the models above, simultaneously | two protocols on both engines at once, one shared host port |
 
@@ -149,7 +155,8 @@ delays; timing is signed off by static timing analysis.
   for the four-engine design (53 tests) and for the current two-engine design (56 tests; 56 / 56 with lock-step
   on, 2026-11-24);
 * in CI, on the routed netlist from LibreLane (`gds` workflow, `gl_test` job): 56 / 56 on 144966f, the first
-  two-engine design to pass hardening; with lock-step on from the runs after 2026-11-24.
+  two-engine design to pass hardening, and 56 / 56 with lock-step on 68e38d0 (2026-11-24): the routed netlist
+  matched the reference model on every pin on every cycle of every test.
 
 ## Bugs found, and by what
 
@@ -166,6 +173,8 @@ delays; timing is signed off by static timing analysis.
 | USB line model | USB transmitter kept driving the bus between packets | release until a packet arrives |
 | formal (FIFO) | none in the RTL; the first ordering property was itself wrong | rewritten |
 | formal (engine) | none in the RTL; found the documented IMEM-rewrite corner case and two missing environment assumptions | assumptions stated |
+| independent review 1 | CAN transmitter left out a stuff bit due after the last CRC bit; I2C controller timed START/STOP set-up from its own SCL release, so a stretching target cut it short; loaders set pins before `PAD_OD`; assembler range checks; USB receive window | programs, loaders, assembler; tests that fail without the fix |
+| independent review 2 | I2C target released SCL in the same cycle it put a 0 on SDA after a stretch (false repeated START); SPI target drove MISO while deselected; USB transmit ran dry at SCK clk/16; loaders left a replaced program's pins and pad modes; JTAG-to-SWD switch had a gap; SWD write data after WAIT; PS/2 watchdog missed a held-low CLK; WS2812 reset gap too short for the V5; decoder crashes; CAN remote frames; shift thresholds | programs, loaders, helpers; tests that fail without the fix |
 
 Several "failures" were bugs in the test models themselves (an I2C controller model that read back a line in the
 same simulator step it drove it, a target model that drove ACK and released SCL at the same instant). These were

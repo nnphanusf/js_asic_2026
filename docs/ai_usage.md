@@ -22,7 +22,7 @@ roles and how the results were verified.
   timing changes in the RTL and flow settings, and the 50 MHz clock (the brief's fallback).
 - Reviewed the finished design for edge cases on real hardware, which led to the host SPI speed limit and the
   dividers for the 50 MHz clock.
-- Reproduced and fixed the findings of the independent review below.
+- Reproduced and fixed the findings of the two independent reviews below.
 
 Decisions and their reasons are logged in `PROGRESS.md`.
 
@@ -41,10 +41,12 @@ Generated code and text were treated as unverified until a tool agreed with them
   safety, and a Yosys equivalence proof for the instruction-memory timing change.
 - **The Tiny Tapeout flow** (LibreLane hardening, precheck, gate-level simulation of the routed netlist) and static
   timing analysis decide whether the chip is buildable; earlier area and timing estimates are only estimates.
-- **Independent review.** The project owner had a second AI assistant, with no part in writing the code, audit
-  the finished repository from a written brief (2026-11-24). It found no RTL defect; its findings in the protocol
-  programs, the host software, the testbench and the documentation were each reproduced and fixed with a test
-  (`PROGRESS.md`).
+- **Independent reviews.** The project owner had a second AI assistant, with no part in writing the code, audit
+  the finished repository from a written brief (2026-11-24), and then had another assistant audit the result
+  (same day, commit 68e38d0). Neither found an RTL defect. Their findings in the protocol programs, the host
+  software, the testbench and the documentation were each reproduced first, then fixed with a test that fails
+  without the fix (`PROGRESS.md`). Where the second review quoted numbers from build logs that could not be
+  downloaded here (post-route slack, fanout warnings, the routed critical path), the documentation says so.
 
 ## Limits
 
