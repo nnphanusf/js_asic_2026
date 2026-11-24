@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Functional coverage report: every reachable (instruction, option, outcome) bin, hit or missed.
 
-Reads coverage/functional.json written by run_lockstep.py --coverage.
+Reads coverage/functional.json written by run_lockstep.py --coverage. Exits 1 on a bin this script does
+not know about (the bin list is out of date) and, with --require-all, on any missed bin: the short CI
+run (50 seeds) reports its misses, the 1000-seed campaign must reach every bin.
 """
 
 import json
@@ -46,7 +48,9 @@ def expected_bins():
 
 
 def main():
-    path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "coverage", "functional.json")
+    args = [a for a in sys.argv[1:] if a != "--require-all"]
+    require_all = "--require-all" in sys.argv[1:]
+    path = args[0] if args else os.path.join(HERE, "coverage", "functional.json")
     hits = json.load(open(path))
     exp = expected_bins()
     missed = [b for b in exp if b not in hits]
@@ -57,7 +61,9 @@ def main():
         print("  missed:", b)
     for b in extra:
         print("  unexpected bin (update cov_report.py):", b)
-    return 0 if not extra else 1
+    if extra or (require_all and missed):
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

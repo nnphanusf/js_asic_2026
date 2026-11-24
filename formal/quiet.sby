@@ -1,0 +1,32 @@
+# Whole chip, through its pins only: from reset until the host first pulls CS_N low, no pad is
+# driven and all outputs are low (formal/quiet_top.v). The cover task shows that the reset release
+# is reached while quiet; driving a pad needs a full host frame, which is beyond a short cover.
+[tasks]
+prove
+cover
+
+[options]
+prove: mode prove
+cover: mode cover
+cover: depth 8
+
+[engines]
+prove: abc pdr
+cover: smtbmc yices
+
+[script]
+read_verilog -sv bw_host_spi.v bw_imem.v bw_clkdiv.v bw_fifo.v bw_bau.v bw_sm.v project.v
+read_verilog -formal -sv quiet_top.v
+prep -top quiet_top
+
+[files]
+quiet_top.v
+../src/project.v
+../src/bw_defs.vh
+../src/bw_host_spi.v
+../src/bw_imem.v
+../src/bw_clkdiv.v
+../src/bw_fifo.v
+../src/bw_bau.v
+../src/bw_sm.v
+../src/bw_sm_formal.vh

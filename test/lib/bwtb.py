@@ -35,7 +35,7 @@ class LockstepError(AssertionError):
 class TB:
     def __init__(self, dut, lockstep: bool = True, spi_half: int = 4):
         self.dut = dut
-        self.lockstep = lockstep and not GL
+        self.lockstep = lockstep
         self.iss = Bitweaver()
         self.spi_half = spi_half
         self.cycles = 0
@@ -59,9 +59,12 @@ class TB:
         dut.host_mosi.value = 0
         for name in IN_NAMES + UIO_NAMES:
             getattr(dut, name).value = 1
-        await ClockCycles(dut.clk, reset_cycles)
+        # One edge loads the tb's input registers; from then on the checker compares every cycle,
+        # including the reset cycles and the release of the reset synchronizer.
+        await ClockCycles(dut.clk, 1)
         if self.lockstep:
             self._mon = cocotb.start_soon(self._check())
+        await ClockCycles(dut.clk, reset_cycles - 1)
         await FallingEdge(dut.clk)
         dut.rst_n.value = 1
         await ClockCycles(dut.clk, 4)
@@ -76,10 +79,14 @@ class TB:
             try:
                 ui, uio = int(dut.ui_q.value), int(dut.uio_q.value)
                 rst, ena = int(dut.rst_q.value), int(dut.ena_q.value)
+                got = (int(dut.uo_out.value), int(dut.uio_out.value), int(dut.uio_oe.value))
             except ValueError:
-                continue
+                # An X or Z on any input or output is a failure, never a skipped cycle.
+                raise LockstepError(
+                    f"undefined value at cycle {iss.cycle}: ui/uio/rst/ena = {dut.ui_q.value}/"
+                    f"{dut.uio_q.value}/{dut.rst_q.value}/{dut.ena_q.value}, uo/uio_out/uio_oe = "
+                    f"{dut.uo_out.value}/{dut.uio_out.value}/{dut.uio_oe.value}") from None
             exp = iss.step(ui, uio, rst_n=rst, ena=ena)
-            got = (int(dut.uo_out.value), int(dut.uio_out.value), int(dut.uio_oe.value))
             self.checked += 1
             if exp != got:
                 raise LockstepError(
@@ -278,7 +285,9 @@ class TB:
     def done(self):
         self.check_ok()
         if self.lockstep:
-            self.dut._log.info(f"lock-step: {self.checked} cycles matched the reference model")
+            assert self.checked == self.cycles, (self.checked, self.cycles)
+            what = "gate-level netlist" if GL else "design"
+            self.dut._log.info(f"lock-step: the {what} matched the reference model on all {self.checked} cycles")
 
 
 def seed_from_env(default: int) -> int:
