@@ -37,27 +37,22 @@ stuff:
     nop [1]                   ; 1..2
     out pins, bau [5]         ; 3..8: the stuff bit (the OSR does not shift)
     jmp bits                  ; 9
+cstuff:
+    nop [1]                   ; 1..2
+cbit:
+    out pins, bau [5]         ; 3..8: a CRC bit, or a stuff bit (the OSR does not shift)
+    jmp cbits                 ; 9
 last:
     out pins, bau             ; 3: the last data bit
     set bau, BAU_STUFF        ; 4: stop the CRC, keep stuffing
     mov osr, ::crc            ; 5: CRC MSB first (the register holds it bit-reversed)
-    set x, 14 [3]             ; 6..9
+    set x, 15 [3]             ; 6..9: X counts the 15 CRC bits, plus one for the exit
 cbits:
-    jmp pin cstuff            ; 0
-    nop                       ; 1
-    jmp !x clast              ; 2
-    out pins, bau [5]         ; 3..8
-    jmp x-- cbits             ; 9
-cstuff:
-    nop [1]
-    out pins, bau [5]
-    jmp cbits
-clast:
-    out pins, bau             ; 3: last CRC bit
-    set bau, 0 [8]            ; 4..12
-    set pins, 1 [9]           ; 13..22: CRC delimiter (recessive)
-    nop [5]                   ; 23..28: ACK slot, we stay recessive
-    wait 0 pin 0 timeout      ; 29: dominant means some node acknowledged: skip the next instruction
+    jmp pin cstuff            ; 0: a stuff bit is due, also after the last CRC bit (ISO 11898-1 10.5)
+    jmp x-- cbit [1]          ; 1..2
+    set pins, 1 [9]           ; 3..12: CRC delimiter (recessive), never stuffed
+    set bau, 0 [5]            ; 13..18: ACK slot, we stay recessive
+    wait 0 pin 0 timeout      ; 19: dominant means some node acknowledged: skip the next instruction
     irq 0 rel                 ; no ACK
     nop [31]                  ; ACK delimiter, EOF and intermission: at least 10 recessive bits
     nop [31]

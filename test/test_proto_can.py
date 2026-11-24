@@ -3,7 +3,8 @@
 """CAN 2.0A: sw/programs/can.bw against an independent CAN node (test/lib/can_model.py).
 
 The bit-level assist unit stuffs and destuffs, and computes the CRC15 on transmit. Frames with long
-runs of equal bits (identifier 0, all-zero and all-one data) exercise stuffing hardest.
+runs of equal bits (identifier 0, all-zero and all-one data) exercise stuffing hardest, and two
+frames need a stuff bit after the last CRC bit.
 Lock-step against the reference model stays on throughout.
 """
 
@@ -16,8 +17,10 @@ from bitweaver.proto import can_rx_decode, can_tx_words
 from bwtb import TB
 from can_model import CanBus, CanNode
 
+# The last two end their CRC with a run of five equal bits (ones, then zeros), so a stuff bit
+# follows the CRC.
 FRAMES = [(0x123, b"\x11\x22\x33"), (0x7FF, b""), (0x000, bytes(8)), (0x555, b"\xff" * 8),
-          (0x0F0, b"\x0f\xf0"), (0x400, b"\x80")]
+          (0x0F0, b"\x0f\xf0"), (0x400, b"\x80"), (0x033, b"\x01"), (0x02B, b"\x01")]
 
 
 async def wait_for(cond, us, step_us=20):
@@ -41,7 +44,7 @@ async def test_can_tx(dut):
         for n, (ident, data) in enumerate(FRAMES):
             await tb.push_all(0, can_tx_words(ident, data))
             await wait_for(lambda: len(node.received) > n, 400)
-        assert node.received == [(i, d, True, True) for i, d in FRAMES], node.received
+        assert node.received == [(i, d, True, True, True) for i, d in FRAMES], node.received
         assert await tb.read1(R.addr("IRQ")) == 0
         # Nobody acknowledges: the program raises IRQ flag 0.
         node.ack = False

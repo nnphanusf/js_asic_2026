@@ -70,7 +70,7 @@ class CanNode:
     def __init__(self, bus: CanBus, bitrate: float, ack: bool = True):
         self.bus, self.ack = bus, ack
         self.bit_ns = round(1e9 / bitrate)
-        self.received: list[tuple] = []  # (ident, data, crc_ok, stuff_ok)
+        self.received: list[tuple] = []  # (ident, data, crc_ok, stuff_ok, delim_ok)
         self.transmitting = False
         cocotb.start_soon(self._rx())
 
@@ -129,14 +129,18 @@ class CanNode:
             end = 19 + 8 * dlc
             data = bytes(int("".join(map(str, bits[19 + 8 * i:27 + 8 * i])), 2) for i in range(dlc))
             crc_ok = crc15(bits[:end]) == int("".join(map(str, bits[end:end + 15])), 2)
-            # We are at 70 % of the CRC delimiter's bit time... unless the CRC ended with a stuff bit.
+            # Stuffing covers the whole CRC sequence: if its last bit ends a run of five, a stuff bit
+            # of the opposite level follows before the delimiter (ISO 11898-1, 10.5). take() checks it.
             if run == 5:
-                await Timer(self.bit_ns, "ns")  # skip the trailing stuff bit
-            # Now 70 % into the CRC delimiter. The ACK slot starts 0.3 bit times later.
+                take(self.bus.level())
+                await Timer(self.bit_ns, "ns")
+            # Now 70 % into the CRC delimiter, which must be recessive. The ACK slot starts 0.3 bit
+            # times later.
+            delim_ok = self.bus.level() == 1
             await Timer(self.bit_ns - round(self.bit_ns * 0.7), "ns")
-            if self.ack and crc_ok and stuff_ok:
+            if self.ack and crc_ok and stuff_ok and delim_ok:
                 self.bus.drive(0)
                 await Timer(self.bit_ns, "ns")
                 self.bus.drive(1)
-            self.received.append((ident, data, crc_ok, stuff_ok))
+            self.received.append((ident, data, crc_ok, stuff_ok, delim_ok))
             await Timer(9 * self.bit_ns, "ns")  # ACK delimiter, EOF
