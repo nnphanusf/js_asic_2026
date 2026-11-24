@@ -109,6 +109,36 @@ def test_errors(bad):
         assemble_one(bad)
 
 
+@pytest.mark.parametrize("bad", [
+    "nop x",                                     # stray operands on nop
+    ".define CPOL 1\n.side_set 1\nnop 1 side 0",  # (the operand is before 'side')
+    ".wrap\nnop",                                 # .wrap before any instruction
+    "nop\n.wrap\n.wrap_target\nnop",            # wrap_target after wrap
+    "nop\n.wrap_target",                         # wrap_target past the end
+    ".pins out_count=17\nnop",
+    ".pins set_count=6\nnop",
+    ".entry 1\nnop",                              # entry outside the program
+    "",                                           # no instructions
+])
+def test_program_errors(bad):
+    with pytest.raises(AsmError):
+        assemble(".program p\n" + bad)
+
+
+def test_side_set_expression_with_spaces():
+    """The side-set value is the whole expression after 'side', also on nop."""
+    p = assemble_one(".define CPOL 1\n.side_set 1\n nop side 1 - CPOL\n out pins, 1 side CPOL ^ 1 [2]")
+    assert p.code == [instr("nop side 0", side_count=1), instr("out pins, 1 side 0 [2]", side_count=1)]
+
+
+def test_entry_must_be_in_jump_range():
+    """The loader starts a program at .entry with an injected JMP, which only reaches the first 32."""
+    src = ".program p\n.entry far\n" + "nop\n" * 35 + "far: nop\n"
+    with pytest.raises(AsmError):
+        assemble(src)
+    assert assemble(".program p\n.entry e\n nop\ne: nop\n")["p"].entry == 1
+
+
 def test_program_length_and_jump_reach():
     """Programs may be up to 64 instructions long, but jump targets must be in the first 32."""
     with pytest.raises(AsmError):

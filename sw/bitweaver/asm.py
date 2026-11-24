@@ -213,6 +213,10 @@ class _Asm:
                     p.config["filter_pins"] = [_eval(x, names) for x in kv.pop("filter").split(",")]
                 if kv:
                     raise AsmError(f"unknown .pins option '{next(iter(kv))}'")
+                if not 0 <= p.config.get("out_count", 0) <= 16:
+                    raise AsmError("out_count must be 0..16")
+                if not 0 <= p.config.get("set_count", 0) <= 5:
+                    raise AsmError("set_count must be 0..5")
             elif d == ".shift":
                 for k, v in kv.items():
                     if k in ("in", "out"):
@@ -284,10 +288,12 @@ class _Asm:
             delay = m.group(1)
             text = text[: m.start()] + text[m.end():]
         side = None
-        m = re.search(r"\bside\s+(\S+)", text, re.I)
+        # The side-set value is everything after 'side' (the delay is already removed), so it may be
+        # an expression with spaces: 'nop side 1 - CPOL'.
+        m = re.search(r"\bside\s+(.+)$", text, re.I)
         if m:
-            side = m.group(1)
-            text = text[: m.start()] + text[m.end():]
+            side = m.group(1).strip()
+            text = text[: m.start()]
         ds = self._ds(side, delay, names, strict)
         toks = text.replace(",", " ").split()
         if not toks:
@@ -300,6 +306,8 @@ class _Asm:
         low = [t.lower() for t in a]
 
         if op == "nop":
+            if a:
+                raise AsmError(f"nop takes no operands, got '{' '.join(a)}'")
             return NOP | (ds << 8)
         if op == "jmp":
             if len(a) == 1:
@@ -392,8 +400,13 @@ class _Asm:
         if len(self.pending) > R.IMEM_DEPTH:
             raise AsmError(f"program '{p.name}' has {len(self.pending)} instructions; the limit is "
                            f"{R.IMEM_DEPTH}")
+        if not self.pending:
+            raise AsmError(f"program '{p.name}' has no instructions")
         if not self.wrap_set:
             p.wrap = len(self.pending) - 1
+        if not 0 <= p.wrap_target <= p.wrap < len(self.pending):
+            raise AsmError(f"program '{p.name}': .wrap_target ({p.wrap_target}) must come before the "
+                           f"instruction marked by .wrap ({p.wrap})")
         names = dict(p.defines)
         names.update(p.labels)
         for n, raw, text in self.pending:
@@ -412,6 +425,10 @@ class _Asm:
         entry = p.config.pop("_entry", None)
         if entry is not None:
             p.entry = _eval(entry, names)
+            # The loader starts the engine there with an injected JMP, which reaches the first 32.
+            if not 0 <= p.entry < min(32, len(p.code)):
+                raise AsmError(f"program '{p.name}': .entry {p.entry} must be one of the program's first "
+                               f"{min(32, len(p.code))} instructions")
         return p
 
 
