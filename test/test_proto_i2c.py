@@ -35,7 +35,8 @@ async def run_cmds(tb, sm, words):
 
 @cocotb.test()
 async def test_i2c_controller(dut):
-    """Writes, reads, repeated START, NACK and target clock stretching at 100 kHz and 400 kHz."""
+    """Writes, reads, repeated START, NACK and target clock stretching (before and after the ACK)
+    at 100 kHz and 400 kHz."""
     tb = TB(dut)
     await tb.start()
     scl, sda = lines(dut)
@@ -61,14 +62,22 @@ async def test_i2c_controller(dut):
         res = await run_cmds(tb, 0, i2c_write_cmds(0x50, [0x5A, 0xA5]))
         assert all(ack for _, ack in res)
         target.stretch_ns = 0
-        await Timer(20, "us")
-        assert target.written == [[0x10, 0xAB, 0xCD], [0x20], [0x5A, 0xA5]], target.written
+        # Stretching after the ACK, where the controller follows with a repeated START or a STOP:
+        # the set-up times are measured from the moment SCL really rises.
+        target.stretch_after_ack_ns = 30000
+        res = await run_cmds(tb, 0, i2c_write_cmds(0x50, [0x30], stop=False) + i2c_read_cmds(0x50, 1))
+        assert [a for _, a in res] == [True, True, True, False] and res[3][0] == 0x55
+        target.stretch_after_ack_ns = 0
+        await Timer(60, "us")  # the final STOP follows a 30 us stretch
+        assert target.written == [[0x10, 0xAB, 0xCD], [0x20], [0x5A, 0xA5], [0x30]], target.written
         dut._log.info(f"{timing.name} mode bus events: {mon.events}")
         assert mon.events == ["S", ("byte", 0xA0, 0), ("byte", 0x10, 0), ("byte", 0xAB, 0), ("byte", 0xCD, 0), "P",
                               "S", ("byte", 0xA0, 0), ("byte", 0x20, 0), "Sr", ("byte", 0xA1, 0),
                               ("byte", 0x11, 0), ("byte", 0x22, 0), ("byte", 0x33, 0), ("byte", 0x44, 1), "P",
                               "S", ("byte", 0xA2, 1), "P",
-                              "S", ("byte", 0xA0, 0), ("byte", 0x5A, 0), ("byte", 0xA5, 0), "P"], mon.events
+                              "S", ("byte", 0xA0, 0), ("byte", 0x5A, 0), ("byte", 0xA5, 0), "P",
+                              "S", ("byte", 0xA0, 0), ("byte", 0x30, 0), "Sr", ("byte", 0xA1, 0),
+                              ("byte", 0x55, 1), "P"], mon.events
         assert not mon.errors, (timing.name, mon.errors)
         mon.stop()
         target.stop()

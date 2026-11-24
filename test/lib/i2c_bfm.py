@@ -162,12 +162,16 @@ class I2cTarget:
     """A target device: records written bytes, answers reads from `replies` (0xFF when empty).
 
     `stretch_ns` > 0 holds SCL low for that long after every byte, before the ACK bit.
+    `stretch_after_ack_ns` > 0 holds SCL low for that long after every ACK or NACK bit, where a
+    controller may follow with a STOP or a repeated START (UM10204 3.1.9 allows either place).
     """
 
-    def __init__(self, scl: Line, sda: Line, address: int, replies=(), stretch_ns: float = 0):
+    def __init__(self, scl: Line, sda: Line, address: int, replies=(), stretch_ns: float = 0,
+                 stretch_after_ack_ns: float = 0):
         self.scl, self.sda, self.address = scl, sda, address
         self.replies = deque(replies)
         self.stretch_ns = stretch_ns
+        self.stretch_after_ack_ns = stretch_after_ack_ns
         self.written: list[list[int]] = []  # one list per write transaction
         self.reads = 0
         self.hold_scl_forever = False
@@ -210,7 +214,16 @@ class I2cTarget:
             await Timer(self.stretch_ns, "ns")
             self.scl.drive(1)
 
-    async def _send_ack(self, ack: bool):
+    async def _stretch_after_ack(self, next_sda: int = 1):
+        """Called right after the falling SCL edge that ends an ACK bit. SDA takes `next_sda` (the
+        next bit the target sends, or 1 to release it) before SCL is released."""
+        self.sda.drive(next_sda)
+        if self.stretch_after_ack_ns:
+            self.scl.drive(0)
+            await Timer(self.stretch_after_ack_ns, "ns")
+            self.scl.drive(1)
+
+    async def _send_ack(self, ack: bool, next_sda: int = 1):
         """Called with SCL low after the 8th bit: drive the ACK bit for one clock.
 
         Any clock stretching happens after SDA is set, so the data is set up before SCL rises."""
@@ -219,7 +232,10 @@ class I2cTarget:
         if not self.scl.level:
             await RisingEdge(self.scl.pad)
         await FallingEdge(self.scl.pad)
-        self.sda.drive(1)
+        await self._stretch_after_ack(next_sda)
+
+    def _next_reply(self) -> int:
+        return self.replies[0] if self.replies else 0xFF
 
     async def _run(self):
         restart = False
@@ -233,14 +249,15 @@ class I2cTarget:
                 if byte >> 1 != self.address:
                     while True:  # not for us: ignore until the next condition
                         await self._bit_in()
-                await self._send_ack(True)
                 if byte & 1 == 0:
+                    await self._send_ack(True)
                     data = []
                     self.written.append(data)
                     while True:
                         data.append(await self._byte_in())
                         await self._send_ack(True)
                 else:
+                    await self._send_ack(True, next_sda=self._next_reply() >> 7)
                     self.reads += 1
                     while True:
                         v = self.replies.popleft() if self.replies else 0xFF
@@ -254,6 +271,7 @@ class I2cTarget:
                         await RisingEdge(self.scl.pad)
                         nack = self.sda.level
                         await FallingEdge(self.scl.pad)
+                        await self._stretch_after_ack(1 if nack else self._next_reply() >> 7)
                         if nack:
                             break
                     while True:

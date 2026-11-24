@@ -15,9 +15,10 @@
 ;                           tHIGH >= 4 us)
 ;   fast mode, 400 kHz:     T_LOW 6, T_HIGH 4, clkdiv 13 at 50 MHz, 15 at 60 MHz (tLOW >= 1.3 us,
 ;                           tHIGH >= 0.6 us)
-; Every SCL release waits until SCL is really high, so targets can stretch the clock; inside a byte
-; that wait is bounded by TMO ticks, after which the program raises IRQ flag 0 (relative to the
-; engine) and waits for the host to clear it.
+; Every SCL release waits until SCL is really high, so targets can stretch the clock (before or
+; after the ACK bit). The set-up times for START and STOP count from that moment. Every such wait is
+; bounded by TMO ticks, after which the program raises IRQ flag 0 (relative to the engine) and waits
+; for the host to clear it.
 ;
 ; Host protocol: one command word per byte, sent MSB first from the OSR:
 ;   bit 15     START (or repeated START) before the byte
@@ -35,8 +36,9 @@ cmd:
     out x, 1                  ; START?
     jmp !x byte
     set pins, 1  [4]          ; release SDA (for a repeated START, SCL is low here)
-    nop side 1   [4]          ; release SCL
-    wait 1 pin 31             ; SCL really high (SCL = IN_BASE + 31 = PIN13)
+    nop side 1                ; release SCL
+    wait 1 pin 31 timeout [4] ; SCL really high (SCL = IN_BASE + 31 = PIN13), then tSU;STA
+    jmp stuck                 ; a target held SCL low for TMO ticks
     set pins, 0  [4]          ; SDA falls while SCL is high: START
     nop side 0
 byte:
@@ -51,8 +53,9 @@ bit:
     out x, 1                  ; STOP?
     jmp !x cmd
     set pins, 0  [4]          ; SDA low
-    nop side 1   [4]          ; release SCL
-    wait 1 pin 31
+    nop side 1                ; release SCL
+    wait 1 pin 31 timeout [4] ; SCL really high, then tSU;STO
+    jmp stuck
     set pins, 1  [4]          ; SDA rises while SCL is high: STOP
     jmp cmd
 stuck:

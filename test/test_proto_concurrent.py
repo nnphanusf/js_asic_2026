@@ -22,11 +22,13 @@ async def test_two_protocols_concurrently(dut):
     tb = TB(dut)
     await tb.start()
     # Pins: SPI on PIN11..14 (CS, MOSI, MISO, SCK), I2C SCL PIN15 / SDA PIN16.
-    await tb.load(load_program("spi_ctrl_cpha0", file="spi"), 0, clkdiv=3)
+    spi_prog = load_program("spi_ctrl_cpha0", file="spi")
+    await tb.load(spi_prog, 0, clkdiv=3)
     i2c_div, i2c_defines = i2c_timing(400e3, F_CLK)
-    await tb.load(load_program("i2c_ctrl", **i2c_defines), 1, clkdiv=i2c_div, in_base=16, out_base=16, set_base=16,
+    i2c_prog = load_program("i2c_ctrl", **i2c_defines)
+    await tb.load(i2c_prog, 1, clkdiv=i2c_div, in_base=16, out_base=16, set_base=16,
                   side_base=15, dirs_pins=[15, 16], high_pins=[15, 16], od_pins=[15, 16])
-    assert tb.origin == 11 + 25
+    assert tb.origin == len(spi_prog.code) + len(i2c_prog.code)  # both programs side by side in IMEM
 
     spi_target = StreamTarget(SpiBus(entity=dut, sclk_name="pad14", mosi_name="pad12", miso_name="ext13",
                                      cs_name="pad11"), SpiConfig(cpol=False, cpha=False, sclk_freq=None),
