@@ -3,8 +3,10 @@
 ; The device drives CLK (10..16.7 kHz) and DATA, both open drain; DATA is valid on the falling edge
 ; of CLK. A frame is 11 bits: start 0, eight data bits LSB first, odd parity, stop 1. Each frame is
 ; pushed as one word; bitweaver.proto.ps2_decode checks it: frame = word >> 5.
-; The glitch filter is on for both lines. A timed WAIT acts as a frame watchdog: if CLK stops for
-; TMO ticks in the middle of a frame, the partial frame is dropped and the receiver resynchronizes.
+; The glitch filter is on for both lines. Timed WAITs act as a frame watchdog: if CLK stays high or
+; stays low for TMO ticks in the middle of a frame (the device gave up, or the host inhibits the bus
+; by holding CLK low), the partial frame is dropped; after a long low the receiver also waits for CLK
+; to return high, so the next frame starts from an empty ISR.
 ; At clkdiv 4 a tick is 80 ns at 50 MHz (67 ns at 60 MHz); TMO 3000 is 240 us (200 us), more than
 ; two bit times either way.
 ; Default pins: DATA = PIN15 (uio[4]), CLK = PIN16 (uio[5]).
@@ -20,8 +22,11 @@ bit:
     wait 0 pin 1 timeout      ; falling edge of CLK; success skips the next instruction
     jmp resync                ; CLK idle for too long
     in pins, 1                ; DATA
-    wait 1 pin 1              ; CLK high again
+    wait 1 pin 1 timeout      ; CLK high again; success skips the next instruction
+    jmp held                  ; CLK held low for too long
 .wrap
+held:
+    wait 1 pin 1              ; wait for the line to return to idle
 resync:
     mov isr, null             ; drop a partial frame (between frames the ISR is empty anyway)
     jmp bit

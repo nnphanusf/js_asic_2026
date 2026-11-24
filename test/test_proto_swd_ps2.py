@@ -110,10 +110,20 @@ class Ps2Keyboard:
         clk.value = 1
         data.value = 1
 
-    async def send(self, byte: int, glitch: bool = False, stop_after: int | None = None):
+    async def send(self, byte: int, glitch: bool = False, stop_after: int | None = None,
+                   hold_low_us: int = 0):
+        """`stop_after` bits, then give up; with `hold_low_us` CLK is then held low that long (as
+        when the host inhibits the bus in the middle of a frame) and the next frame follows soon."""
         bits = [0] + [(byte >> i) & 1 for i in range(8)] + [(bin(byte).count("1") + 1) & 1, 1]
         for i, b in enumerate(bits):
             if stop_after is not None and i == stop_after:
+                if hold_low_us:
+                    self.clk.value = 0
+                    await Timer(hold_low_us, "us")
+                    self.clk.value = 1
+                    self.data.value = 1
+                    await Timer(60, "us")  # a device retransmits once CLK has been high for 50 us
+                    return
                 break
             self.data.value = b
             await Timer(self.half // 2, "us")
@@ -142,7 +152,12 @@ async def test_ps2(dut):
         await kb.send(c)
     await kb.send(0x29, stop_after=5)  # the device gives up mid-frame
     await Timer(400, "us")  # longer than the watchdog
-    for c in codes[3:]:
+    for c in codes[3:6]:
+        await kb.send(c, glitch=True)
+    # CLK held low in the middle of a frame for longer than the watchdog (360 us > 240 us), then the
+    # next frame 60 us later: the partial frame must not be prepended to it.
+    await kb.send(0x29, stop_after=5, hold_low_us=360)
+    for c in codes[6:]:
         await kb.send(c, glitch=True)
     got = [ps2_decode(w) for w in await collector]
     assert got == [(c, True) for c in codes], got
