@@ -61,14 +61,17 @@ bit:
 ; * Each reply byte comes from the TX FIFO, or is 0xFF if the FIFO is empty. The next reply is
 ;   fetched during the last bit of the previous byte; if that found the FIFO empty, the program
 ;   tries again when CS next falls, so replies queued between frames are not lost.
-; * CS release is noticed between bytes and while waiting for the first clock edge.
+; * MISO is driven only while CS is low, so several targets can share MISO. The target releases it
+;   a few cycles after CS rises, also in the middle of a byte. A byte cut short by CS is dropped in
+;   both directions: its bits are not pushed and its reply is not sent again.
 ; Run at clkdiv 1: SCK up to about 3 MHz.
-.pins in=12 out=13 out_count=1 jmp=11 dirs=13
+.pins in=12 out=13 out_count=1 set=13 set_count=1 jmp=11
 .shift in=left out=left
 .timeout 0                    ; a timed WAIT checks once and falls through
     mov x, !null              ; X = 0xFFFF marks "no reply": host bytes are at most 0xFF
     mov osr, x
 wait_cs:
+    set pindirs, 0            ; deselected: release MISO
     wait 0 pin 31             ; CS low (IN_BASE + 31 wraps around to PIN11)
     mov y, osr
     jmp x!=y frame            ; a real reply is already waiting
@@ -77,6 +80,7 @@ wait_cs:
 frame:
 .wrap_target
     mov pins, ::osr           ; show the reply's MSB without shifting it out
+    set pindirs, 1            ; and drive MISO
 first:
     jmp pin wait_cs           ; CS released before the first clock edge
     wait 1 pin 2 timeout      ; SCK high skips the next instruction
@@ -85,13 +89,26 @@ first:
 bit:
     in pins, 1                ; rising edge: sample MOSI
     out null, 1               ; drop the bit just sent
-    wait 0 pin 2              ; falling edge: show the next bit
+fall:
+    jmp pin abort             ; CS released in the middle of a byte
+    wait 0 pin 2 timeout      ; falling edge: show the next bit
+    jmp fall
     mov pins, ::osr
-    wait 1 pin 2
+rise:
+    jmp pin abort
+    wait 1 pin 2 timeout
+    jmp rise
     jmp y-- bit
     in pins, 1                ; last bit
     push noblock
     pull noblock              ; fetch the next reply now
     mov osr, <>osr
-    wait 0 pin 2
+last:
+    jmp pin wait_cs
+    wait 0 pin 2 timeout
+    jmp last
 .wrap
+abort:
+    mov osr, x                ; the reply was partly sent: try the FIFO at the next CS
+    mov isr, null             ; drop the bits received so far
+    jmp wait_cs

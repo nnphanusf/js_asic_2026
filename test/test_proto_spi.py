@@ -68,6 +68,13 @@ async def test_spi_target_mode0(dut):
     await tb.start()
     await tb.load(load_program("spi_target", file="spi"), 1)
     await tb.enable(1 << 1)
+    miso_oe = 1 << (MISO - 11)
+
+    def driving() -> bool:
+        return bool(int(dut.uio_oe.value) & miso_oe)
+
+    await Timer(1, "us")
+    assert not driving(), "MISO driven while deselected"
     for freq in (1e6, 2.5e6):
         bus = SpiBus(entity=dut, sclk_name=f"ext{SCK}", mosi_name=f"ext{MOSI}", miso_name=f"pad{MISO}",
                      cs_name=f"ext{CS}")
@@ -86,4 +93,32 @@ async def test_spi_target_mode0(dut):
         dut.ext14.value = 0
         dut.ext11.value = 1
         await Timer(2, "us")
+        assert not driving(), (freq, "MISO still driven after CS rose")
+
+    # A byte cut short by CS: MISO is released at once, nothing reaches the RX FIFO, and the next
+    # frame starts cleanly with the next queued reply.
+    dut.ext11.value = 0
+    await Timer(1, "us")
+    assert driving()
+    for bit in (1, 0, 1):
+        dut.ext12.value = bit
+        await Timer(200, "ns")
+        dut.ext14.value = 1
+        await Timer(200, "ns")
+        dut.ext14.value = 0
+    await Timer(200, "ns")
+    dut.ext11.value = 1
+    await Timer(200, "ns")
+    assert not driving(), "MISO still driven after an aborted byte"
+    assert await tb.rx_level(1) == 0
+    await tb.push(1, [0x5A])
+    bus = SpiBus(entity=dut, sclk_name=f"ext{SCK}", mosi_name=f"ext{MOSI}", miso_name=f"pad{MISO}",
+                 cs_name=f"ext{CS}")
+    master = SpiMaster(bus, SpiConfig(sclk_freq=1e6, cpol=False, cpha=False, msb_first=True))
+    await master.write([0xA5], burst=True)
+    assert list(await master.read(1)) == [0x5A]
+    await tb.wait_rx(1, 1, timeout_cycles=5000)
+    assert await tb.pop(1, 1) == [0xA5]
+    master._run_coroutine_obj.cancel()
+    master._SpiClock._run_coroutine_obj.cancel()
     tb.done()
