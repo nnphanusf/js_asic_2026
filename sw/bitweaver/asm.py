@@ -217,6 +217,17 @@ class _Asm:
                     raise AsmError("out_count must be 0..16")
                 if not 0 <= p.config.get("set_count", 0) <= 5:
                     raise AsmError("set_count must be 0..5")
+                for k in ("in_base", "out_base", "set_base", "side_base", "jmp_pin"):
+                    if not 0 <= p.config.get(k, 0) <= 31:
+                        raise AsmError(f"{k} must be a pin number 0..31")
+                for k, lo, what in (("dirs_pins", 5, "an output pin 5..18"), ("high_pins", 5, "an output pin 5..18"),
+                                    ("od_pins", 11, "a bidirectional pin 11..18")):
+                    for pin in p.config.get(k, []):
+                        if not lo <= pin <= 18:
+                            raise AsmError(f"{k[:-5]} pin {pin} must be {what}")
+                for pin in p.config.get("filter_pins", []):
+                    if not (0 <= pin <= 4 or 11 <= pin <= 18):
+                        raise AsmError(f"filter pin {pin} must be an input pin 0..4 or 11..18")
             elif d == ".shift":
                 for k, v in kv.items():
                     if k in ("in", "out"):
@@ -243,13 +254,21 @@ class _Asm:
                     p.config[f] = 1
                 if "chain" in kv:
                     p.config["chain_src"] = _eval(kv["chain"], names)
+                    if not 0 <= p.config["chain_src"] < R.NUM_SM:
+                        raise AsmError(f"chain source must be an engine 0..{R.NUM_SM - 1}")
             elif d == ".timeout":
                 p.config["tmo"] = _eval(" ".join(args), names)
+                if not 0 <= p.config["tmo"] <= 0xFFFF:
+                    raise AsmError("timeout must be 0..65535 ticks")
             elif d == ".bau":
                 if "poly" in kv:
                     p.config["bau_poly"] = _eval(kv["poly"], names)
+                    if not 0 <= p.config["bau_poly"] <= 0xFFFF:
+                        raise AsmError("CRC polynomial must fit in 16 bits")
                 if "stuff" in kv:
                     p.config["stuff_n"] = _eval(kv["stuff"], names)
+                    if not 0 <= p.config["stuff_n"] <= 7:
+                        raise AsmError("stuff run length must be 0..7 (0 disables stuffing)")
                 if "any" in flags:
                     p.config["stuff_any"] = 1
                 if "ones" in flags:

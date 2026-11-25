@@ -84,7 +84,7 @@ def test_directives():
 .pins in=11 out=12 set=13 side=14 jmp=15 out_count=2 set_count=3 od=13,14 filter=11
 .shift in=left out=right autopush=8 pull_thresh=12
 .clkdiv 32.5
-.fifo join_tx chain=2
+.fifo join_tx chain=1
 .timeout 1000
 .bau poly=0xA001 stuff=6 ones
 .init set pindirs, 1
@@ -93,7 +93,7 @@ def test_directives():
     assert p.config == {
         "in_base": 11, "out_base": 12, "set_base": 13, "side_base": 14, "jmp_pin": 15, "out_count": 2,
         "set_count": 3, "od_pins": [13, 14], "filter_pins": [11], "in_shiftdir": 0, "out_shiftdir": 1,
-        "autopush": 1, "push_thresh": 8, "pull_thresh": 12, "clkdiv": 32.5, "join_tx": 1, "chain_src": 2,
+        "autopush": 1, "push_thresh": 8, "pull_thresh": 12, "clkdiv": 32.5, "join_tx": 1, "chain_src": 1,
         "tmo": 1000, "bau_poly": 0xA001, "stuff_n": 6, "stuff_any": 0,
     }
     assert p.init == [instr("set pindirs, 1")]
@@ -205,3 +205,16 @@ def test_shift_thresholds_in_range(thresh, ok):
         return
     shiftctrl = sm_config(assemble_one(src), 0)[6]
     assert shiftctrl & 0xF == thresh % 16 and (shiftctrl >> 8) & 1
+
+
+@pytest.mark.parametrize("directive, message", [
+    (".pins in=40", "pin number"), (".pins jmp=32", "pin number"), (".pins dirs=3", "output pin"),
+    (".pins dirs=19", "output pin"), (".pins od=9", "bidirectional"), (".pins filter=7", "input pin"),
+    (".fifo chain=2", "chain source"), (".timeout 70000", "timeout"), (".bau poly=0x1A001", "16 bits"),
+    (".bau stuff=9", "stuff run length"),
+])
+def test_directive_values_in_range(directive, message):
+    """Directive values that do not fit their register are errors, not truncated at load time."""
+    from bitweaver.asm import AsmError, assemble_one
+    with pytest.raises(AsmError, match=message):
+        assemble_one(f".program t\n{directive}\n    nop\n")
