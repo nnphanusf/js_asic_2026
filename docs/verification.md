@@ -23,7 +23,7 @@ next-state value from the current state and the inputs sampled at the clock edge
 lock-step (layer 2) shows that the RTL implements the model exactly, and the independent protocol models (layer 3)
 are what show that the model itself does the right thing.
 
-The pytest suite (`make -C sw test`, 165 tests) checks the assembler encodings and error messages, a
+The pytest suite (`make -C sw test`, 166 tests) checks the assembler encodings and error messages, a
 disassemble/re-assemble round trip over the whole 16-bit encoding space, the generated files
 (`src/bw_defs.vh`, `docs/regmap.md` must match `regmap.py`), each documented instruction rule on the ISS, that
 every program in `sw/programs` assembles, and the MicroPython board driver against the ISS.
@@ -175,6 +175,7 @@ delays; timing is signed off by static timing analysis.
 | formal (FIFO) | none in the RTL; the first ordering property was itself wrong | rewritten |
 | formal (engine) | none in the RTL; found the documented IMEM-rewrite corner case and two missing environment assumptions | assumptions stated |
 | independent review 1 | CAN transmitter left out a stuff bit due after the last CRC bit; I2C controller timed START/STOP set-up from its own SCL release, so a stretching target cut it short; loaders set pins before `PAD_OD`; assembler range checks; USB receive window | programs, loaders, assembler; tests that fail without the fix |
+| independent review 4 | the SPI target kept MISO driven if CS rose while SCK was still high after the eighth rising edge | program; a test that fails without the fix |
 | independent review 3 | `usb_rx` ignored the BAU's stuff error and a missing stuff bit before the EOP; the SPI target needed 9 cycles from CS to MISO and missed 3 MHz; the CAN model and decoder did not handle remote frames; a remapped `uart_tx` floated during a reload; directive ranges | programs, model, loader, assembler; tests that fail without the fix |
 | independent review 2 | I2C target released SCL in the same cycle it put a 0 on SDA after a stretch (false repeated START); SPI target drove MISO while deselected; USB transmit ran dry at SCK clk/16; loaders left a replaced program's pins and pad modes; JTAG-to-SWD switch had a gap; SWD write data after WAIT; PS/2 watchdog missed a held-low CLK; WS2812 reset gap too short for the V5; decoder crashes; CAN remote frames; shift thresholds | programs, loaders, helpers; tests that fail without the fix |
 

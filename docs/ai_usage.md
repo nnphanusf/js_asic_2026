@@ -44,7 +44,7 @@ Generated code and text were treated as unverified until a tool agreed with them
   timing analysis decide whether the chip is buildable; earlier area and timing estimates are only estimates.
 - **Independent reviews.** The project owner had a second AI assistant, with no part in writing the code, audit
   the finished repository from a written brief (2026-11-24), and then had other assistants audit the result
-  twice more (same day, commits 68e38d0 and 3b3beae). None found an RTL defect. Their findings in the protocol
+  three more times (same day, commits 68e38d0, 3b3beae and 35927dd). None found an RTL defect. Their findings in the protocol
   programs, the host software, the testbench and the documentation were each reproduced first, then fixed with a
   test that fails without the fix (`PROGRESS.md`). Where the second review quoted numbers from build logs that
   could not be downloaded here (post-route slack, fanout warnings, the routed critical path), the documentation

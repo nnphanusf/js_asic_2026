@@ -71,7 +71,7 @@ with two, and CS low at least 160 ns before the first rising edge.
 | UART 8N1 / 8E1 TX | `uart_tx` (4) | 1 | 9600 – 921 600 baud | 8 ticks per bit: 6.25 Mbaud at clkdiv 1 (50 MHz) |
 | UART RX | `uart_rx` (11) | 1 | 9600 – 921 600 baud | samples mid-bit, framing error flag |
 | SPI controller, modes 0–3 | `spi_ctrl_cpha0/1` (11) | 1 | 1 MHz, 7.5 MHz (60 MHz clock) | 4 ticks per bit: 6.25 MHz at clkdiv 2 (50 MHz) with ideal pads; clkdiv 4 or more on the board (see above) |
-| SPI target, mode 0 | `spi_target` (33) | 1 | 1 MHz, 2.5 MHz; at 50 MHz up to 3 MHz | 2.5 MHz with 60 ns of MISO delay, 3 MHz with 40 ns (see above); MISO driven only while CS is low, so targets can share it; a byte cut short by CS is dropped |
+| SPI target, mode 0 | `spi_target` (35) | 1 | 1 MHz, 2.5 MHz; at 50 MHz up to 3 MHz | 2.5 MHz with 60 ns of MISO delay, 3 MHz with 40 ns (see above); MISO driven only while CS is low, so targets can share it; a byte cut short by CS is dropped |
 | I2C controller | `i2c_ctrl` (27) | 1 | 100 kHz, 400 kHz | all standard/fast-mode timing limits met, also when a target stretches SCL before or after the ACK; bit split 5/5 ticks (standard) or 6/4 (fast) |
 | I2C target | `i2c_cond` (19) + `i2c_target` (42) | 2 | 100 kHz, 400 kHz | clock stretching while the host supplies read data; each data bit is on SDA 16 cycles (320 ns at 50 MHz) before SCL is released |
 | WS2812 | `ws2812` (4) | 1 | 857 kHz | 833 kHz at 50 MHz: T0H 360 ns, T1H 840 ns (857 kHz, 350 / 817 ns at 60 MHz); 300 µs low between frames latches every revision, including the WS2812B-V5 (> 280 µs) |

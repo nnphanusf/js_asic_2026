@@ -3,6 +3,16 @@
 Deadline 2027-01-18 (RTL freeze 2027-01-08). This file is the running log:
 what is done, what is next, and every decision with its reason.
 
+## Fourth independent review (2026-11-24, commit 35927dd)
+
+A fourth audit cloned 35927dd fresh, reran pytest (165), check-gen, lint and the RTL cocotb suite (58/58 in
+lock-step), checked the CI jobs, probed every fix of the third review adversarially (USB packets ending in five
+ones at both line levels, back-to-back bad and good packets, the SPI target with an empty FIFO), and found the
+design ready to submit with no RTL change. Its one finding, low severity: the third review's SPI speed-up had
+replaced the CS check on the last falling edge of a byte with a plain wait, so a controller that raised CS
+while SCK was still high after the eighth rising edge left MISO driven until SCK fell. The CS-aware loop is
+back (35 instructions); the measured limits are unchanged, and a new test raises CS with SCK high.
+
 ## Third independent review (2026-11-24, commit 3b3beae)
 
 A third audit, read-only from the same brief, reran every gate (pytest 143, cocotb 58/58 in lock-step on RTL
@@ -220,7 +230,7 @@ The software and docs around it:
 Full numbers are in `docs/results.md`.
 
 **Verification.**
-- pytest: 165 tests (77 at the time of this report; 16 added on 2026-11-23, then 26, 24 and 22 with the three
+- pytest: 166 tests (77 at the time of this report; 16 added on 2026-11-23, then 26, 24, 22 and 1 with the four
   reviews on 2026-11-24).
 - cocotb: 58 tests (two added with the second review), all in cycle-by-cycle lock-step with the simulator. All
   58 passed on the routed netlist in CI in lock-step (3b3beae), and on the local Yosys/IHP netlist.
