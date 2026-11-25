@@ -23,7 +23,7 @@ next-state value from the current state and the inputs sampled at the clock edge
 lock-step (layer 2) shows that the RTL implements the model exactly, and the independent protocol models (layer 3)
 are what show that the model itself does the right thing.
 
-The pytest suite (`make -C sw test`, 143 tests) checks the assembler encodings and error messages, a
+The pytest suite (`make -C sw test`, 165 tests) checks the assembler encodings and error messages, a
 disassemble/re-assemble round trip over the whole 16-bit encoding space, the generated files
 (`src/bw_defs.vh`, `docs/regmap.md` must match `regmap.py`), each documented instruction rule on the ISS, that
 every program in `sw/programs` assembles, and the MicroPython board driver against the ISS.
@@ -40,9 +40,11 @@ the select word, and an ACK-aware SWD write puts no data on the wire after WAIT 
 ISS with 20 ns cycles (the rated 50 MHz) and checks the WS2812 pulse widths at 40, 50 and 60 MHz, 1-Wire reads
 against a device that releases a 0 at 16 µs (and that the old 60 MHz divider would misread it), the CAN bit
 rates, USB packets in both directions (`usb_tx` exact, edges within one clock of the divider's grid; `usb_rx`
-with the sender 0.4 % slow or fast, at four phases; `usb_tx` packets back to back through the SPI host port at
-SCK = clk/16 with `push_packet`), and the host port's read margin with `SpiDriver(miso_delay=...)`: at SCK clk/8
-a single cycle of MISO delay breaks reads, at clk/16 four cycles still work.
+with the sender 0.4 % slow or fast, at four phases, and rejecting a trailing stuff bit sent as 1 or left out
+at nine phases; `usb_tx` packets back to back through the SPI host port at SCK = clk/16 with `push_packet`),
+the SPI target's limits against a mode-0 controller model with delayed MISO (2.5 MHz with 60 ns, 3 MHz with
+40 ns, CS set-up 160 ns, at ten phases), and the host port's read margin with `SpiDriver(miso_delay=...)`: at
+SCK clk/8 a single cycle of MISO delay breaks reads, at clk/16 four cycles still work.
 
 ## 2. Lock-step: RTL against the ISS
 
@@ -88,7 +90,7 @@ of the wire* that knows nothing about Bitweaver:
 | JTAG | `jtag.bw` | IEEE 1149.1 TAP model (16-state controller, IR, IDCODE, BYPASS, user register) | IDCODE read, IR capture, register write/read-back, BYPASS delay |
 | SWD | `swd.bw` | Arm ADIv5 SW-DP model, starting in JTAG mode | the exact JTAG-to-SWD switch (the old sequence is shown to fail), line reset, DPIDR, power-up handshake, posted AP reads, parity, malformed request, WAIT with no data phase |
 | PS/2 | `ps2.bw` | keyboard model | frames, odd parity, glitches on CLK (filter), aborted frames with CLK left high or held low for 360 µs (WAIT timeouts) |
-| CAN 2.0A | `can.bw` | CAN node with its own encoder, stuffing and CRC15, wired-AND bus | TX and RX at 500 kbit/s and 1 Mbit/s, worst-case stuffing, a stuff bit after the last CRC bit (both levels), recessive CRC delimiter, ACK and missing ACK |
+| CAN 2.0A | `can.bw` | CAN node with its own encoder, stuffing and CRC15, wired-AND bus | TX and RX at 500 kbit/s and 1 Mbit/s, worst-case stuffing, a stuff bit after the last CRC bit (both levels), recessive CRC delimiter, ACK and missing ACK, remote frames requesting 0, 4 and 8 bytes |
 | USB low speed | `usb.bw` | USB 2.0 line model with spec-literal CRC5/CRC16 | DATA0/1 (incl. all-0xFF stuffing, zero length), ACK, IN, SETUP; NRZI, stuffing, EOP, bus release; transmit at 50 MHz with the host port at SCK = clk/16 |
 | 1-Wire | `onewire.bw` | Maxim 1-Wire device (ROM, scratchpad) | reset/presence, ROM with CRC8, write/read, absent device timeout |
 | Concurrency | SPI controller + I2C controller (400 kHz) | the models above, simultaneously | two protocols on both engines at once, one shared host port |
@@ -152,11 +154,10 @@ netlists are simulated without timing (no SDF back-annotation), so they check th
 delays; timing is signed off by static timing analysis.
 
 * locally, on the Yosys netlist mapped to the IHP SG13CMOS5L cells (`scripts/synth_area.sh`): every test passes,
-  for the four-engine design (53 tests) and for the current two-engine design (56 tests; 56 / 56 with lock-step
-  on, 2026-11-24);
+  for the four-engine design (53 tests) and for the current two-engine design (58 tests, all in lock-step);
 * in CI, on the routed netlist from LibreLane (`gds` workflow, `gl_test` job): 56 / 56 on 144966f, the first
-  two-engine design to pass hardening, and 56 / 56 with lock-step on 68e38d0 (2026-11-24): the routed netlist
-  matched the reference model on every pin on every cycle of every test.
+  two-engine design to pass hardening, 56 / 56 with lock-step on 68e38d0 and 58 / 58 with lock-step on 3b3beae
+  (2026-11-24): the routed netlist matched the reference model on every pin on every cycle of every test.
 
 ## Bugs found, and by what
 
@@ -174,6 +175,7 @@ delays; timing is signed off by static timing analysis.
 | formal (FIFO) | none in the RTL; the first ordering property was itself wrong | rewritten |
 | formal (engine) | none in the RTL; found the documented IMEM-rewrite corner case and two missing environment assumptions | assumptions stated |
 | independent review 1 | CAN transmitter left out a stuff bit due after the last CRC bit; I2C controller timed START/STOP set-up from its own SCL release, so a stretching target cut it short; loaders set pins before `PAD_OD`; assembler range checks; USB receive window | programs, loaders, assembler; tests that fail without the fix |
+| independent review 3 | `usb_rx` ignored the BAU's stuff error and a missing stuff bit before the EOP; the SPI target needed 9 cycles from CS to MISO and missed 3 MHz; the CAN model and decoder did not handle remote frames; a remapped `uart_tx` floated during a reload; directive ranges | programs, model, loader, assembler; tests that fail without the fix |
 | independent review 2 | I2C target released SCL in the same cycle it put a 0 on SDA after a stretch (false repeated START); SPI target drove MISO while deselected; USB transmit ran dry at SCK clk/16; loaders left a replaced program's pins and pad modes; JTAG-to-SWD switch had a gap; SWD write data after WAIT; PS/2 watchdog missed a held-low CLK; WS2812 reset gap too short for the V5; decoder crashes; CAN remote frames; shift thresholds | programs, loaders, helpers; tests that fail without the fix |
 
 Several "failures" were bugs in the test models themselves (an I2C controller model that read back a line in the

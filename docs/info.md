@@ -101,7 +101,9 @@ transceivers of its own:
 
 Signals that an external device returns in answer to the chip's clock (SPI MISO, JTAG TDO, SWD data) pass
 the pads and the Tiny Tapeout multiplexer twice; start those programs at clkdiv 4 or more (about 3 MHz) and
-speed up only after checking the board. The host port itself needs SCK at most clk/16.
+speed up only after checking the board. The SPI target answers an external clock: up to 2.5 MHz SCK with
+60 ns of pad and multiplexer delay, with CS low at least 160 ns before the first edge. The host port itself
+needs SCK at most clk/16.
 
 The example programs compute their dividers for the rated 50 MHz clock. Run the chip at another clock only with
 dividers computed for it (`--f-clk` for `python3 -m bitweaver.loader`, `f_clk=` for the helpers in

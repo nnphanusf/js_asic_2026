@@ -3,6 +3,47 @@
 Deadline 2027-01-18 (RTL freeze 2027-01-08). This file is the running log:
 what is done, what is next, and every decision with its reason.
 
+## Third independent review (2026-11-24, commit 3b3beae)
+
+A third audit, read-only from the same brief, reran every gate (pytest 143, cocotb 58/58 in lock-step on RTL
+and a local gate-level netlist, the Verilator random lock-step, all six formal jobs, synthesis: 14 922 cells
+and 242 717 um2 exactly) and checked all 25 fixes of the first two reviews. It found no RTL defect and said the
+hardware is ready to submit as it is. Its five findings were in firmware, host software and docs; each was
+reproduced before it was fixed, and each fix has a test that fails without it. No RTL file changed.
+
+**Fixed.**
+- **USB receive ignored bit-stuffing errors.** `usb_rx` never looked at the BAU's sticky stuff error flag, so
+  a trailing stuff bit sent as 1 (seven ones) or left out before the EOP still decoded as valid: the CRC is
+  computed before stuffing. Now a set error flag, or a stuff bit still due at the EOP, marks the packet bad (bit
+  count 0xFFFF). Where a stuff bit is due, D- and D+ are also sampled in the same cycle (`mov osr, pins`, then
+  `in osr, bau`), so SE0 in that slot is caught even when it decodes as a valid transition. Two other ways
+  were tried first: checking the end-of-packet flag one tick before or after the sample either missed slow
+  senders on long packets or rejected valid ones from fast senders. An IN token and an 8-byte DATA1 whose CRCs
+  end with six ones are accepted with their stuff bit and rejected with it sent as 1 or left out, at -0.4, 0
+  and +0.4 % and nine phases; the earlier tolerance tests still pass. `usb_rx` is 29 instructions.
+- **SPI target speed.** The CS fix of the second review cost cycles: MISO came 9 to 10 cycles after CS fell,
+  and the direction was set again on every byte, so a controller with half a period of CS set-up read a wrong
+  first bit from 2.8 MHz (2.2 MHz with 60 ns of pad delay). The first bit is now put on the released pin while
+  CS is high, the target waits for CS in a one-cycle loop (MISO driven 4 cycles after CS falls), and the
+  direction is set once per selection. A mode-0 controller model at 50 MHz with delayed MISO measures the
+  limits, now in the docs: 2.5 MHz with 60 ns, 3 MHz with 40 ns, CS set-up 160 ns, at ten phases. The model
+  reproduces the review's failures on the old program. 33 instructions.
+- **CAN remote frames.** `can_rx_decode` dropped the RTR bit and the DLC, and the CAN model node ignored RTR,
+  so remote frames were never tested on the wire. The model handles them, the CAN tests send remote frames
+  requesting 0, 4 and 8 bytes both ways, and `can_rx_frame` returns the RTR flag and DLC. The programs were
+  already right.
+- **Hand-over of pins set up in `.init`.** `uart_tx` and `ws2812` make their pin an output with `.init set
+  pindirs`, which the hand-over did not count, so a `uart_tx` moved onto PIN11 floated during a reload (about
+  130 us at clk/16). Such SET-range pins now count as set up by the program.
+- **Assembler:** `.pins` bases over 31, `dirs`/`high`/`od`/`filter` pins of the wrong kind, a chain source that
+  is not an engine, `.timeout` and the CRC polynomial over 16 bits and a stuff run over 7 are errors.
+- **Docs:** gate-level counts (58 on 3b3beae in CI), the sixth formal job in the AI use page, the SPI target
+  limits and remote frames in the results.
+
+**Not changed.** The board's real pad and multiplexer delays, and gate-level simulation with SDF delays,
+remain open questions for silicon; the review agreed that functional netlist tests plus three-corner static
+timing analysis are the standard sign-off for Tiny Tapeout.
+
 ## Second independent review (2026-11-24, commit 68e38d0)
 
 A second audit, by another AI assistant working read-only from the same brief, checked the first review's fixes
@@ -179,11 +220,10 @@ The software and docs around it:
 Full numbers are in `docs/results.md`.
 
 **Verification.**
-- pytest: 143 tests (77 at the time of this report; 16 added on 2026-11-23, 26 with the first review and 24 with
-  the second on 2026-11-24).
-- cocotb: 58 tests (two added with the second review), all in cycle-by-cycle lock-step with the simulator. The 56
-  of 68e38d0 passed on the routed netlist in CI in lock-step, and on the local Yosys/IHP netlist; the 58 run on
-  the routed netlist with every push.
+- pytest: 165 tests (77 at the time of this report; 16 added on 2026-11-23, then 26, 24 and 22 with the three
+  reviews on 2026-11-24).
+- cocotb: 58 tests (two added with the second review), all in cycle-by-cycle lock-step with the simulator. All
+  58 passed on the routed netlist in CI in lock-step (3b3beae), and on the local Yosys/IHP netlist.
 - Constrained-random lock-step (Verilator): 100M cycles over 1000 seeds with no mismatch; CI runs 10M cycles on
   every push.
 - Coverage: functional 465/465 bins, line 100 % (285/285), toggle 98.3 % (8444/8590). The 146 untoggled points

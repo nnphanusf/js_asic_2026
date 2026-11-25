@@ -37,16 +37,18 @@ Generated code and text were treated as unverified until a tool agreed with them
   exists.
 - **Independent protocol models.** Protocol programs are judged by third-party models (`cocotbext-uart`,
   `cocotbext-spi`) or by models written separately from the firmware, never only by the simulator.
-- **Formal proofs** (SymbiYosys) for the FIFO, the host port, engine invariants, the clock divider and open-drain
-  safety, and a Yosys equivalence proof for the instruction-memory timing change.
+- **Formal proofs** (SymbiYosys) for the FIFO, the host port, engine invariants, the clock divider, open-drain
+  safety and a quiet chip from reset until the host selects it, and a Yosys equivalence proof for the
+  instruction-memory timing change.
 - **The Tiny Tapeout flow** (LibreLane hardening, precheck, gate-level simulation of the routed netlist) and static
   timing analysis decide whether the chip is buildable; earlier area and timing estimates are only estimates.
 - **Independent reviews.** The project owner had a second AI assistant, with no part in writing the code, audit
-  the finished repository from a written brief (2026-11-24), and then had another assistant audit the result
-  (same day, commit 68e38d0). Neither found an RTL defect. Their findings in the protocol programs, the host
-  software, the testbench and the documentation were each reproduced first, then fixed with a test that fails
-  without the fix (`PROGRESS.md`). Where the second review quoted numbers from build logs that could not be
-  downloaded here (post-route slack, fanout warnings, the routed critical path), the documentation says so.
+  the finished repository from a written brief (2026-11-24), and then had other assistants audit the result
+  twice more (same day, commits 68e38d0 and 3b3beae). None found an RTL defect. Their findings in the protocol
+  programs, the host software, the testbench and the documentation were each reproduced first, then fixed with a
+  test that fails without the fix (`PROGRESS.md`). Where the second review quoted numbers from build logs that
+  could not be downloaded here (post-route slack, fanout warnings, the routed critical path), the documentation
+  says so; the third review reproduced the synthesis numbers and found the CI results it could check green.
 
 ## Limits
 
