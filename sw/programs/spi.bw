@@ -59,28 +59,38 @@ bit:
 ; * Every received byte goes to the RX FIFO. If the FIFO is full the byte is dropped and
 ;   FDEBUG.RXSTALL is set, because a target must never stall the bus.
 ; * Each reply byte comes from the TX FIFO, or is 0xFF if the FIFO is empty. The next reply is
-;   fetched during the last bit of the previous byte; if that found the FIFO empty, the program
-;   tries again when CS next falls, so replies queued between frames are not lost.
-; * MISO is driven only while CS is low, so several targets can share MISO. The target releases it
-;   a few cycles after CS rises, also in the middle of a byte. A byte cut short by CS is dropped in
-;   both directions: its bits are not pushed and its reply is not sent again.
-; Run at clkdiv 1: SCK up to about 3 MHz.
+;   fetched during the last bit of the previous byte, and while CS is high and no reply is waiting
+;   the FIFO is checked every 6 cycles, so a reply queued between frames is not lost.
+; * MISO is driven only while CS is low, so several targets can share it. The first bit is on the
+;   (released) pin before CS falls, and MISO is driven 4 cycles after CS falls (up to 9 if the
+;   reply arrived in the last few cycles before CS fell). The target
+;   releases MISO a few cycles after CS rises, also in the middle of a byte; a byte cut short by CS
+;   is dropped in both directions.
+; Run at clkdiv 1. Limits at 50 MHz, at any phase (sw/tests/test_clock_and_host_timing.py): SCK up to
+; 2.5 MHz with up to three cycles (60 ns) of pad and multiplexer delay on MISO, 3 MHz with up to two;
+; CS low at least 160 ns before the first rising SCK edge (80 ns with ideal pads).
 .pins in=12 out=13 out_count=1 set=13 set_count=1 jmp=11
 .shift in=left out=left
 .timeout 0                    ; a timed WAIT checks once and falls through
     mov x, !null              ; X = 0xFFFF marks "no reply": host bytes are at most 0xFF
-    mov osr, x
+abort:                        ; also the start: no reply in the OSR, nothing received
+    mov osr, x                ; CS rose mid-byte: drop the partly sent reply
+    mov isr, null             ; and the bits received so far
 wait_cs:
     set pindirs, 0            ; deselected: release MISO
-    wait 0 pin 31             ; CS low (IN_BASE + 31 wraps around to PIN11)
+poll:
     mov y, osr
-    jmp x!=y frame            ; a real reply is already waiting
-    pull noblock              ; otherwise try the FIFO again
+    jmp x!=y staged           ; a real reply is already waiting
+    pull noblock              ; otherwise try the FIFO
     mov osr, <>osr            ; reply byte to the top of the OSR (0xFFFF stays 0xFFFF)
-frame:
+    mov pins, ::osr
+    jmp pin poll              ; CS (JMP_PIN, PIN11) still high: keep looking for a reply
+staged:
+    mov pins, ::osr           ; the reply's MSB on the released pin, without shifting it out
+hold:
+    jmp pin hold              ; wait for CS low, checking every cycle
+    set pindirs, 1            ; selected: drive MISO
 .wrap_target
-    mov pins, ::osr           ; show the reply's MSB without shifting it out
-    set pindirs, 1            ; and drive MISO
 first:
     jmp pin wait_cs           ; CS released before the first clock edge
     wait 1 pin 2 timeout      ; SCK high skips the next instruction
@@ -103,12 +113,6 @@ rise:
     push noblock
     pull noblock              ; fetch the next reply now
     mov osr, <>osr
-last:
-    jmp pin wait_cs
-    wait 0 pin 2 timeout
-    jmp last
+    wait 0 pin 2              ; the last falling edge (mode 0: SCK is low before CS rises)
+    mov pins, ::osr           ; the next byte's MSB
 .wrap
-abort:
-    mov osr, x                ; the reply was partly sent: try the FIFO at the next CS
-    mov isr, null             ; drop the bits received so far
-    jmp wait_cs

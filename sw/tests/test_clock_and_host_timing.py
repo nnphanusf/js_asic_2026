@@ -242,6 +242,58 @@ def test_usb_tx_at_clk16_host():
         at = first_k + int(len(want) * period)
 
 
+# ---------------------------------------------------------------- SPI target at 50 MHz
+def _spi_target_exchange(sent, replies, sck_hz, tcss, miso_delay=0, phase=0.0):
+    """A mode-0 controller against spi_target at 50 MHz. CS falls; the first rising SCK edge follows
+    `tcss` SCK periods later; MOSI changes on falling edges; MISO is sampled at each rising edge as it
+    was `miso_delay` cycles earlier (pads, multiplexer). Returns (bytes read, bytes received)."""
+    bench = Bench()
+    d = FastDriver(bench)
+    d.load(load_program("spi_target", file="spi"), 0, origin=0)
+    d.enable(1)
+    d.push(0, replies)
+    bench.run(60)
+    period = 50e6 / sck_hz
+    t0 = bench.cycle + 7 + phase
+    bits = [(byte >> i) & 1 for byte in sent for i in range(7, -1, -1)]
+    first_rise = t0 + tcss * period
+    end = first_rise + len(bits) * period  # CS rises half a period after the last falling edge
+
+    def level(c):
+        if c < t0 or c >= end:
+            return 1, 0, 0  # CS, SCK, MOSI
+        k = int((c - first_rise) // period) if c >= first_rise else -1
+        sck = int(c >= first_rise and (c - first_rise) % period < period / 2)
+        mosi = bits[min(max(k + (0 if sck else 1), 0), len(bits) - 1)]
+        return 0, sck, mosi
+
+    history = []
+
+    def controller(b):
+        cs, sck, mosi = level(b.cycle)
+        b.uio_ext = (b.uio_ext & ~0b1011) | cs | (mosi << 1) | (sck << 3) | 0b100  # MISO pulled up
+        history.append(b.pin(13))
+
+    bench.hooks.append(controller)
+    start = bench.cycle
+    bench.run(int(end - start) + 40)
+    rises = [int(first_rise + k * period + 0.999) for k in range(len(bits))]
+    got = [history[r - start - miso_delay] for r in rises]
+    read = bytes(sum(got[8 * i + j] << (7 - j) for j in range(8)) for i in range(len(sent)))
+    return read, bytes(w & 0xFF for w in d.pop(0, d.rx_level(0)))
+
+
+@pytest.mark.parametrize("sck_mhz, miso_delay", [(1.0, 3), (2.5, 3), (3.0, 2)])
+def test_spi_target_limits_at_50mhz(sck_mhz, miso_delay):
+    """The documented spi_target limits, at ten phases: SCK 2.5 MHz with three cycles of MISO delay,
+    3 MHz with two, and CS low 160 ns before the first rising edge (shorter than half a period)."""
+    sent, replies = bytes([0x24, 0x81, 0x7E, 0x55]), [0x11, 0x22, 0x33, 0x44]
+    tcss = 160e-9 * sck_mhz * 1e6
+    for phase in range(10):
+        got = _spi_target_exchange(sent, replies, sck_mhz * 1e6, tcss, miso_delay, phase / 10 * 50 / sck_mhz)
+        assert got == (bytes(replies), sent), (phase, got)
+
+
 # ---------------------------------------------------------------- WS2812 on the simulator, 20 ns cycles
 def _runs(levels):
     """(level, length) runs of a 0/1 sequence."""
