@@ -378,14 +378,22 @@ def can_tx_words(ident: int, data=b"", rtr: bool = False, dlc: int | None = None
 def can_rx_decode(words) -> tuple[int, bytes, bool]:
     """(identifier, data, CRC correct) from the words can_rx pushed for one frame.
 
-    A remote frame has no data field: its data is b"" whatever length its DLC requests. A frame
-    with fewer bits than its DLC needs is invalid."""
+    A remote frame has no data field, so its data is b""; can_rx_frame also says whether the frame
+    was a remote frame and which length it requests. A frame with fewer bits than its DLC needs is
+    invalid."""
+    ident, _, _, data, ok = can_rx_frame(words)
+    return ident, data, ok
+
+
+def can_rx_frame(words) -> tuple[int, bool, int, bytes, bool]:
+    """(identifier, remote frame, DLC, data, CRC correct) from the words can_rx pushed for one frame.
+    For a remote frame the DLC is the requested length and data is b""."""
     if not words:
-        return 0, b"", False
+        return 0, False, 0, b"", False
     count = words[-1]
     full, rest = divmod(count, 16)
     if len(words) < full + 2 or count < 19:  # too few words, or too short for a header
-        return 0, b"", False
+        return 0, False, 0, b"", False
     bits = []
     for w in words[:full]:
         bits += [(w >> i) & 1 for i in range(15, -1, -1)]
@@ -394,14 +402,14 @@ def can_rx_decode(words) -> tuple[int, bytes, bool]:
     def field(start, n):
         return sum(bits[start + i] << (n - 1 - i) for i in range(n))
 
-    ident = field(1, 11)
-    n_data = 0 if bits[12] else min(field(15, 4), 8)  # RTR: no data field
+    ident, rtr, dlc = field(1, 11), bool(bits[12]), field(15, 4)
+    n_data = 0 if rtr else min(dlc, 8)  # a remote frame has no data field
     end = 19 + 8 * n_data
     if len(bits) < end + 15:  # the data field and CRC the header announces are not all there
-        return ident, b"", False
+        return ident, rtr, dlc, b"", False
     data = bytes(field(19 + 8 * i, 8) for i in range(n_data))
     crc = field(end, 15)
-    return ident, data, crc == can_crc15(bits[:end])
+    return ident, rtr, dlc, data, crc == can_crc15(bits[:end])
 
 
 # ---------------------------------------------------------------- low-speed USB (usb.bw)

@@ -32,10 +32,12 @@ def stuff(bits):
     return out
 
 
-def encode(ident, data):
-    f = [0] + [(ident >> i) & 1 for i in range(10, -1, -1)] + [0, 0, 0]
-    f += [(len(data) >> i) & 1 for i in range(3, -1, -1)]
-    for byte in data:
+def encode(ident, data, rtr=False, dlc=None):
+    """A data frame, or with rtr a remote frame: no data field, DLC = the length it requests."""
+    dlc = len(data) if dlc is None else dlc
+    f = [0] + [(ident >> i) & 1 for i in range(10, -1, -1)] + [int(rtr), 0, 0]
+    f += [(dlc >> i) & 1 for i in range(3, -1, -1)]
+    for byte in (b"" if rtr else data):
         f += [(byte >> i) & 1 for i in range(7, -1, -1)]
     c = crc15(f)
     f += [(c >> i) & 1 for i in range(14, -1, -1)]
@@ -70,13 +72,15 @@ class CanNode:
     def __init__(self, bus: CanBus, bitrate: float, ack: bool = True):
         self.bus, self.ack = bus, ack
         self.bit_ns = round(1e9 / bitrate)
-        self.received: list[tuple] = []  # (ident, data, crc_ok, stuff_ok, delim_ok)
+        # (ident, data, crc_ok, stuff_ok, delim_ok); for a remote frame, data is the requested length
+        self.received: list[tuple] = []
         self.transmitting = False
         cocotb.start_soon(self._rx())
 
-    async def send(self, ident: int, data=b"") -> bool:
-        """Transmit one frame; returns True if some other node acknowledged it."""
-        bits, ack_i = encode(ident, bytes(data))
+    async def send(self, ident: int, data=b"", rtr: bool = False, dlc: int | None = None) -> bool:
+        """Transmit one frame (rtr: a remote frame requesting dlc bytes); returns True if some other
+        node acknowledged it."""
+        bits, ack_i = encode(ident, bytes(data), rtr, dlc)
         self.transmitting = True
         acked = False
         for i, b in enumerate(bits):
@@ -115,19 +119,22 @@ class CanNode:
                 bits.append(b)
                 return True
 
+            def n_data():  # a remote frame (RTR, bit 12) has no data field whatever its DLC
+                return 0 if bits[12] else min(int("".join(map(str, bits[15:19])), 2), 8)
+
             def need():
                 if len(bits) < 19:
                     return 19 + 15
-                dlc = min(int("".join(map(str, bits[15:19])), 2), 8)
-                return 19 + 8 * dlc + 15
+                return 19 + 8 * n_data() + 15
 
             while len(bits) < need():
                 take(self.bus.level())
                 await Timer(self.bit_ns, "ns")
             ident = int("".join(map(str, bits[1:12])), 2)
-            dlc = min(int("".join(map(str, bits[15:19])), 2), 8)
-            end = 19 + 8 * dlc
-            data = bytes(int("".join(map(str, bits[19 + 8 * i:27 + 8 * i])), 2) for i in range(dlc))
+            end = 19 + 8 * n_data()
+            data = bytes(int("".join(map(str, bits[19 + 8 * i:27 + 8 * i])), 2) for i in range(n_data()))
+            if bits[12]:
+                data = int("".join(map(str, bits[15:19])), 2)  # the requested length
             crc_ok = crc15(bits[:end]) == int("".join(map(str, bits[end:end + 15])), 2)
             # Stuffing covers the whole CRC sequence: if its last bit ends a run of five, a stuff bit
             # of the opposite level follows before the delimiter (ISO 11898-1, 10.5). take() checks it.

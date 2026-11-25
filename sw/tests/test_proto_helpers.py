@@ -2,8 +2,8 @@
 
 import pytest
 
-from bitweaver.proto import (SwdSeq, can_crc15, can_frame_bits, can_rx_decode, swd_run, swd_transfer,
-                             usb_rx_decode)
+from bitweaver.proto import (SwdSeq, can_crc15, can_frame_bits, can_rx_decode, can_rx_frame, swd_run,
+                             swd_transfer, usb_rx_decode)
 
 
 # ---------------------------------------------------------------- decoders never crash on short input
@@ -43,6 +43,11 @@ def test_can_remote_frame_has_no_data_field():
     bits = can_frame_bits(0x123, rtr=True, dlc=1)
     assert len(bits) == 19 and bits[12] == 1 and bits[15:19] == [0, 0, 0, 1]
     assert can_rx_decode(_can_rx_words(_with_crc(bits))) == (0x123, b"", True)
+    # can_rx_frame tells a remote request from an empty data frame, and gives the requested length.
+    for dlc in (0, 1, 4, 8):
+        words = _can_rx_words(_with_crc(can_frame_bits(0x123, rtr=True, dlc=dlc)))
+        assert can_rx_frame(words) == (0x123, True, dlc, b"", True)
+    assert can_rx_frame(_can_rx_words(_with_crc(can_frame_bits(0x123)))) == (0x123, False, 0, b"", True)
     data = can_frame_bits(0x123, b"\xA5")
     assert len(data) == 27
     assert can_rx_decode(_can_rx_words(_with_crc(data))) == (0x123, b"\xA5", True)

@@ -13,14 +13,23 @@ from cocotb.triggers import Timer
 
 from bitweaver import regmap as R
 from bitweaver.asm import load_program
-from bitweaver.proto import can_rx_decode, can_tx_words
+from bitweaver.proto import can_rx_decode, can_rx_frame, can_tx_words
 from bwtb import TB
 from can_model import CanBus, CanNode
 
-# The last two end their CRC with a run of five equal bits (ones, then zeros), so a stuff bit
-# follows the CRC.
+# 0x033 and 0x02B end their CRC with a run of five equal bits (ones, then zeros), so a stuff bit
+# follows the CRC. An int instead of bytes is a remote frame requesting that many bytes (no data
+# field, ISO 11898-1 10.4.2.4); the requests for 4 and 8 bytes differ from an empty data frame only
+# in the RTR bit and the DLC.
 FRAMES = [(0x123, b"\x11\x22\x33"), (0x7FF, b""), (0x000, bytes(8)), (0x555, b"\xff" * 8),
-          (0x0F0, b"\x0f\xf0"), (0x400, b"\x80"), (0x033, b"\x01"), (0x02B, b"\x01")]
+          (0x0F0, b"\x0f\xf0"), (0x400, b"\x80"), (0x033, b"\x01"), (0x02B, b"\x01"),
+          (0x123, 4), (0x7FF, 8), (0x123, 0)]
+
+
+def tx_words(ident, payload):
+    if isinstance(payload, int):
+        return can_tx_words(ident, rtr=True, dlc=payload)
+    return can_tx_words(ident, payload)
 
 
 async def wait_for(cond, us, step_us=20):
@@ -42,7 +51,7 @@ async def test_can_tx(dut):
         await tb.load(load_program("can_tx", file="can"), 0, origin=0, clkdiv=clkdiv)
         await tb.enable(1)
         for n, (ident, data) in enumerate(FRAMES):
-            await tb.push_all(0, can_tx_words(ident, data))
+            await tb.push_all(0, tx_words(ident, data))
             await wait_for(lambda: len(node.received) > n, 400)
         assert node.received == [(i, d, True, True, True) for i, d in FRAMES], node.received
         assert await tb.read1(R.addr("IRQ")) == 0
@@ -68,9 +77,16 @@ async def test_can_rx(dut):
     await tb.load(load_program("can_rx", file="can"), 1, clkdiv=12)
     await tb.enable(2)
     for ident, data in FRAMES:
-        await node.send(ident, data)
+        remote = isinstance(data, int)
+        if remote:
+            await node.send(ident, rtr=True, dlc=data)
+        else:
+            await node.send(ident, data)
         await Timer(10, "us")
         n = await tb.rx_level(1)
         words = await tb.pop(1, n)
-        assert can_rx_decode(words) == (ident, data, True), (ident, data, [hex(w) for w in words])
+        want = (ident, True, data, b"", True) if remote else (ident, False, len(data), data, True)
+        assert can_rx_frame(words) == want, (ident, data, [hex(w) for w in words])
+        if not remote:
+            assert can_rx_decode(words) == (ident, data, True)
     tb.done()
