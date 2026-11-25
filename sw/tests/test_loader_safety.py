@@ -118,21 +118,28 @@ def test_release_keeps_the_other_engine(driver):
     assert bench.pin(13) == 1 and bench.pin(14) == 1
 
 
+UART_ON_PIN11 = dict(out_base=11, set_base=11, side_base=11)
+
+
 @pytest.mark.parametrize("driver", DRIVERS)
-@pytest.mark.parametrize("name, file, pins", [("uart_tx", "uart", (9,)), ("spi_ctrl_cpha0", "spi", (11, 12, 14))])
-def test_reloading_an_engine_moves_no_pin(name, file, pins, driver):
+@pytest.mark.parametrize("name, file, pins, moved", [("uart_tx", "uart", (9,), {}),
+                                                     ("uart_tx", "uart", (11,), UART_ON_PIN11),
+                                                     ("spi_ctrl_cpha0", "spi", (11, 12, 14), {})])
+def test_reloading_an_engine_moves_no_pin(name, file, pins, moved, driver):
     """Reloading an engine (another divider, say) leaves the pins the program sets up at their level:
-    no release in between, which would put a start bit on a UART line (PIN5..PIN10 drive 0 when
-    released) or an edge on SPI's SCK."""
+    no release in between, which would put a start bit on a UART line or an edge on SPI's SCK. This
+    holds for pins set up by `.init set pindirs` too (uart_tx), also moved onto PIN11..PIN18. The
+    bidirectional pads are pulled low here, so a released pin would show."""
     bench = Bench(trace=True)
+    bench.uio_ext = 0x00
     d = DRIVERS[driver](bench)
     prog = load_program(name, file=file)
-    d.load(prog, 0, origin=0, clkdiv=2)
+    d.load(prog, 0, origin=0, clkdiv=2, **moved)
     d.enable(1)
     bench.run(100)
     d.disable(1)
     start = len(bench.trace)
-    d.load(prog, 0, origin=0, clkdiv=15)
+    d.load(prog, 0, origin=0, clkdiv=15, **moved)
     d.enable(1)
     bench.run(50)
     for pin in pins:

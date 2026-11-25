@@ -124,11 +124,19 @@ def pad_masks(prog: Program, **overrides) -> tuple[int, int]:
 
 
 def image_pins(prog: Program, **overrides) -> tuple[int, int, int, int]:
-    """(owned pins, pins it sets up, open-drain mask, filter mask) of a program, as PinOwners records them."""
+    """(owned pins, pins it sets up, open-drain mask, filter mask) of a program, as PinOwners records them.
+
+    A program sets a pin up itself when it is in `.pins dirs=`, or in its SET range and one of its
+    `.init` instructions is `set pindirs` (uart_tx and ws2812 do that), wherever the SET range is moved.
+    """
     c = dict(prog.config)
     c.update(overrides)
     od, filt = pad_masks(prog, **{k: v for k, v in overrides.items() if k in ("od_pins", "filter_pins")})
-    return owned_pins(prog, **overrides), pin_mask(c.get("dirs_pins")), od, filt
+    dirs = pin_mask(c.get("dirs_pins"))
+    if any((w >> 13) == R.OP_SET and ((w >> 5) & 7) == R.SET_PINDIRS for w in prog.init):
+        for i in range(c.get("set_count", 0)):
+            dirs |= 1 << ((c.get("set_base", 0) + i) % 32)
+    return owned_pins(prog, **overrides), dirs & OUTPUT_PINS, od, filt
 
 
 OUTPUT_PINS = ((1 << 19) - 1) & ~0x1F  # PIN5..PIN18: the pins an engine can drive
