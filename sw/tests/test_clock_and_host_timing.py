@@ -294,6 +294,29 @@ def test_spi_target_limits_at_50mhz(sck_mhz, miso_delay):
         assert got == (bytes(replies), sent), (phase, got)
 
 
+def test_spi_target_releases_miso_when_cs_rises_with_sck_high():
+    """A controller that gives up on the eighth bit with SCK still high (an abort, or a switch to a
+    CPOL = 1 peer on a shared bus): MISO is released within a few cycles all the same."""
+    bench = Bench()
+    d = FastDriver(bench)
+    d.load(load_program("spi_target", file="spi"), 0, origin=0)
+    d.enable(1)
+    d.push(0, [0x55])
+    bench.run(60)
+
+    def pins(cs, sck, cycles):
+        bench.uio_ext = (bench.uio_ext & ~0b1001) | cs | (sck << 3)
+        bench.run(cycles)
+
+    pins(0, 0, 40)
+    for _ in range(7):
+        pins(0, 1, 20)
+        pins(0, 0, 20)
+    pins(0, 1, 20)  # the eighth rising edge, and SCK stays high
+    pins(1, 1, 20)
+    assert not (bench.out[2] >> 2) & 1, "MISO still driven after CS rose"
+
+
 # ---------------------------------------------------------------- WS2812 on the simulator, 20 ns cycles
 def _runs(levels):
     """(level, length) runs of a 0/1 sequence."""

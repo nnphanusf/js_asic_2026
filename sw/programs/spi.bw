@@ -113,6 +113,9 @@ rise:
     push noblock
     pull noblock              ; fetch the next reply now
     mov osr, <>osr
-    wait 0 pin 2              ; the last falling edge (mode 0: SCK is low before CS rises)
+last:
+    jmp pin wait_cs           ; CS released after the last rising edge, even with SCK still high
+    wait 0 pin 2 timeout      ; the last falling edge
+    jmp last
     mov pins, ::osr           ; the next byte's MSB
 .wrap
