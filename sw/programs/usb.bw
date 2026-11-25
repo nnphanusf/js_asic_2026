@@ -71,7 +71,9 @@ estuff:
 .program usb_rx
 ; Receives packets: destuffed, NRZI-decoded bits are pushed LSB first in 16-bit words. At the end of
 ; the packet (IRQ flag 6 from usb_se0) the partial last word and the bit count are pushed.
-; bitweaver.proto.usb_rx_decode checks SYNC, PID and CRC.
+; bitweaver.proto.usb_rx_decode checks SYNC, PID and CRC. A bit-stuffing error marks the packet bad
+; (count 0xFFFF): seven ones in a row anywhere (the BAU's sticky BERR flag), or a stuff bit that is
+; missing before the EOP (USB 2.0 7.1.9).
 .pins in=DM jmp=30            ; JMP PIN: IRQ flag 6 (virtual pin 30)
 .clkdiv F_CLK / 15000000
 .bau stuff=6 ones
@@ -86,15 +88,33 @@ idle:
     mov x, !null              ; X counts bits down from 0xFFFF; sample in the middle of each bit
 .wrap_target
 bit:
-    wait 1 pin STUFF-DM timeout  ; a stuff bit is due: skip the counting instruction
-    jmp x-- count
-    nop
+    wait 1 pin STUFF-DM timeout  ; 0: a stuff bit is due: skip the counting instruction
+    jmp x-- count             ; 1
+    jmp stuff                 ; 1
 count:
-    in pins, bau [6]          ; NRZI decode and destuff D-
-    jmp pin done              ; SE0 seen
+    in pins, bau [6]          ; 2..8: NRZI decode and destuff D-
+    jmp pin done              ; 9: SE0 seen
 .wrap
+stuff:
+    mov osr, pins             ; 2: D- and D+ in the same cycle, where the stuff bit should be
+    in osr, bau               ; 3: D- through the BAU: the stuff bit, checked and dropped
+    out y, 2
+    jmp !y bad                ; 5: both lines low: SE0 instead of the stuff bit, the sender left it out
+    nop [1]                   ; 6..7
+    jmp pin done              ; 8
+    jmp bit                   ; 9
 done:
     push                      ; partial last word (left aligned)
+    wait 0 pin BERR-DM timeout   ; seven ones in a row somewhere (a stuff error): the packet is bad
+    jmp bad
+    wait 1 pin STUFF-DM timeout  ; a stuff bit still due at the EOP ...
+    jmp good
+    mov osr, !x
+    out y, 1                  ; ... is fine only with an odd count: the extra SE0 sample (see
+    jmp y-- good              ;     usb_rx_decode) made the run, not the sender
+bad:
+    mov x, null               ; bit count 0xFFFF: usb_rx_decode rejects the packet
+good:
     mov isr, !x
     push                      ; bit count
     jmp idle

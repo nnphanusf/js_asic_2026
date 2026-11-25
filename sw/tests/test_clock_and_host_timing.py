@@ -10,7 +10,7 @@ import pytest
 from bitweaver import regmap as R
 from bitweaver.asm import load_program
 from bitweaver.loader import Bench, FastDriver, SpiDriver, clkdiv_fields
-from bitweaver.proto import (USB_PID, can_clkdiv, i2c_timing, spi_clkdiv, uart_clkdiv, usb_crc16, usb_pid_byte,
+from bitweaver.proto import (USB_PID, can_clkdiv, i2c_timing, spi_clkdiv, uart_clkdiv, usb_crc5, usb_crc16, usb_pid_byte,
                              usb_rx_decode, usb_tx_words)
 
 NS_50 = 20.0  # one clock cycle at the rated 50 MHz, in ns
@@ -109,6 +109,83 @@ def test_usb_rx_at_50mhz_with_sender_offset(offset):
     for phase in (0.0, 0.25, 0.5, 0.75):
         assert _usb_receive("DATA0", GET_DESCRIPTOR, offset, phase * 33) == ("DATA0", GET_DESCRIPTOR, True)
         assert _usb_receive("ACK", None, 5 * offset, phase * 33) == ("ACK", b"", True)
+
+
+def _usb_bits_line(bits, trailing):
+    """(D-, D+) per bit for raw packet bits, stuffed and NRZI encoded, then EOP. `trailing` says what
+    happens to a stuff bit due after the last bit: "ok" sends it, "one" sends a 1 (seven ones in a
+    row), "omit" leaves it out (SE0 straight after six ones)."""
+    stuffed, ones = [], 0
+    for i, b in enumerate(bits):
+        stuffed.append(b)
+        ones = ones + 1 if b else 0
+        if ones == 6:
+            if i < len(bits) - 1 or trailing == "ok":
+                stuffed.append(0)
+            elif trailing == "one":
+                stuffed.append(1)
+            ones = 0
+    level, out = 1, []
+    for b in stuffed:
+        level ^= b ^ 1
+        out.append((level, level ^ 1))
+    return out + [(0, 0), (0, 0), (1, 0)]
+
+
+def _usb_receive_line(line, offset, phase):
+    bench = Bench()
+    d = FastDriver(bench)
+    d.load(load_program("usb_se0"), 0, clkdiv=1)
+    d.load(load_program("usb_rx"), 1)
+    d.enable(0b11)
+    bench.run(50)
+    period = 50e6 / (1.5e6 * (1 + offset))
+    t0 = bench.cycle + 10 + phase
+
+    def sender(b):
+        k = int((b.cycle - t0) // period) if b.cycle >= t0 else -1
+        dm, dp = line[k] if 0 <= k < len(line) else (1, 0)
+        b.uio_ext = (b.uio_ext & ~3) | dm | (dp << 1)
+
+    bench.hooks.append(sender)
+    bench.run(int(period * (len(line) + 4)))
+    return usb_rx_decode(d.pop(1, d.rx_level(1)))
+
+
+_FIELD = 0x0C | (0x8 << 7)  # IN to address 12, endpoint 8: its CRC5 ends the packet with six ones
+_LONG = b"\xff" * 6 + b"\x00\x53"  # 8 bytes, many stuff bits, and a CRC16 that ends with six ones
+_STUFF_PACKETS = {
+    "IN": _lsb(0x80, 8) + _lsb(usb_pid_byte(USB_PID["IN"]), 8) + _lsb(_FIELD, 11) + _lsb(usb_crc5(_FIELD), 5),
+    "DATA1": _lsb(0x80, 8) + _lsb(usb_pid_byte(USB_PID["DATA1"]), 8)
+    + [b for x in _LONG for b in _lsb(x, 8)] + _lsb(usb_crc16(_LONG), 16),
+}
+
+
+@pytest.mark.parametrize("pid", _STUFF_PACKETS)
+@pytest.mark.parametrize("trailing", ["ok", "one", "omit"])
+def test_usb_rx_checks_the_trailing_stuff_bit(pid, trailing):
+    """A packet whose CRC ends with six ones needs a stuff bit before the EOP (USB 2.0 7.1.9). usb_rx
+    accepts it with the stuff bit and rejects it with the stuff bit sent as 1 (seven ones: the BAU's
+    stuff error) or left out (SE0 where the stuff bit belongs), from a sender up to 0.4 % off, at any
+    phase."""
+    bits = _STUFF_PACKETS[pid]
+    assert bits[-6:] == [1] * 6
+    line = _usb_bits_line(bits, trailing)
+    for offset in (-0.004, 0.0, 0.004):
+        for phase in range(0, 33, 4):
+            name, _, ok = _usb_receive_line(line, offset, phase)
+            assert ok == (trailing == "ok"), (offset, phase)
+            if ok:
+                assert name == pid
+
+
+def test_usb_rx_rejects_seven_ones_inside_a_packet():
+    bits = _STUFF_PACKETS["DATA1"]
+    line = _usb_bits_line(bits, "ok")
+    k = 16 + 6  # the stuff bit after the first six ones of the payload (SYNC and PID have no run of six)
+    line = line[:k] + [line[k - 1]] + line[k + 1:]  # sent without its transition: a seventh one
+    for phase in (0, 11, 22):
+        assert _usb_receive_line(line, 0.0, phase)[2] is False
 
 
 def test_usb_tx_at_50mhz():
